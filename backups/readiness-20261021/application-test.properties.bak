@@ -1,0 +1,20 @@
+# This profile is for automated tests only. It is deliberately pinned to the
+# separate test database and cannot be redirected to the development database.
+spring.datasource.url=jdbc:postgresql://localhost:5432/research_workflow_test_db
+spring.datasource.username=workflow_service_user
+spring.datasource.password=${WORKFLOW_DB_PASSWORD}
+spring.datasource.driver-class-name=org.postgresql.Driver
+spring.jpa.hibernate.ddl-auto=validate
+spring.jpa.open-in-view=false
+spring.jpa.show-sql=false
+spring.flyway.enabled=true
+spring.flyway.locations=classpath:db/migration
+workflow.security.admin-username=workflow_test_admin
+workflow.security.admin-password=test-admin-password-not-for-production
+workflow.security.service-username=workflow_test_service
+workflow.security.service-password=test-service-password-not-for-production
+workflow.security.actor-signing-secret=test-only-signing-secret-0123456789
+server.error.include-message=never
+server.error.include-binding-errors=never
+server.error.include-stacktrace=never
+server.error.include-exception=false

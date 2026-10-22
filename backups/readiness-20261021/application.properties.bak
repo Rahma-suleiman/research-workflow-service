@@ -1,0 +1,53 @@
+
+spring.application.name=research-workflow-service
+
+server.port=8081
+
+# sudo -u postgres psql -d research_workflow_db
+
+# Workflow service database
+spring.datasource.url=${WORKFLOW_DB_URL:jdbc:postgresql://localhost:5432/research_workflow_db}
+spring.datasource.username=${WORKFLOW_DB_USERNAME:workflow_service_user}
+spring.datasource.password=${WORKFLOW_DB_PASSWORD:12345}
+spring.datasource.driver-class-name=org.postgresql.Driver
+
+# JPA: Flyway manages database schema
+spring.jpa.hibernate.ddl-auto=validate
+spring.jpa.open-in-view=false
+spring.jpa.show-sql=false
+
+# Database migrations
+spring.flyway.enabled=true
+spring.flyway.locations=classpath:db/migration
+
+# Health endpoint
+management.endpoints.web.exposure.include=health
+management.endpoint.health.show-details=never
+
+
+# Local development only; override these with environment variables.
+workflow.security.admin-username=${WORKFLOW_ADMIN_USERNAME:workflow_admin}
+workflow.security.admin-password=${WORKFLOW_ADMIN_PASSWORD:admin123}
+
+workflow.security.service-username=${WORKFLOW_SERVICE_USERNAME:permit_workflow_api}
+workflow.security.service-password=${WORKFLOW_SERVICE_PASSWORD:workflow123}
+# Required to authorize actor claims sent by the trusted Research Permit backend.
+# Use a random secret of at least 32 characters and keep it out of source control.
+workflow.security.actor-signing-secret=${WORKFLOW_ACTOR_SIGNING_SECRET:}
+
+# Never expose exception internals in HTTP error responses.
+server.error.include-message=never
+server.error.include-binding-errors=never
+server.error.include-stacktrace=never
+server.error.include-exception=false
+
+# Actuator health groups for container/orchestrator probes.
+management.endpoint.health.probes.enabled=true
+management.endpoint.health.show-components=never
+management.endpoint.health.show-details=never
+
+# Conservative connection-pool defaults; override for measured deployment load.
+spring.datasource.hikari.maximum-pool-size=${WORKFLOW_DB_POOL_MAX_SIZE:10}
+spring.datasource.hikari.minimum-idle=${WORKFLOW_DB_POOL_MIN_IDLE:2}
+spring.datasource.hikari.connection-timeout=${WORKFLOW_DB_CONNECTION_TIMEOUT_MS:30000}
+spring.datasource.hikari.validation-timeout=${WORKFLOW_DB_VALIDATION_TIMEOUT_MS:5000}
