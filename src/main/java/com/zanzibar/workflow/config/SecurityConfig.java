@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import jakarta.annotation.PostConstruct;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -38,13 +39,15 @@ public class SecurityConfig {
     @Value("${spring.datasource.password:}")
     private String databasePassword;
 
-    @Value("${spring.profiles.active:}")
-    private String activeProfiles;
+    private final Environment environment;
+
+    public SecurityConfig(Environment environment) {
+        this.environment = environment;
+    }
 
     @PostConstruct
     void validateProductionSecrets() {
-        boolean production = java.util.Arrays.stream(activeProfiles.split(","))
-            .map(String::trim)
+        boolean production = java.util.Arrays.stream(environment.getActiveProfiles())
             .anyMatch(profile -> profile.equalsIgnoreCase("prod")
                 || profile.equalsIgnoreCase("production"));
         if (!production) {
