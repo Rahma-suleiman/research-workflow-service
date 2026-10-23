@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -32,4 +34,19 @@ public interface WorkflowInstanceRepository
         @Param("id") UUID id,
         @Param("tenantKey") String tenantKey
     );
+
+    List<WorkflowInstance> findTop200ByTenantKeyAndDueAtBeforeOrderByDueAtAsc(
+        String tenantKey,
+        Instant now
+    );
+
+    /** Overdue instances not yet reported; SKIP LOCKED makes this safe on several nodes. */
+    @Query(value = """
+        SELECT * FROM workflow_instances
+        WHERE due_at <= CURRENT_TIMESTAMP AND NOT sla_breach_notified
+        ORDER BY due_at
+        LIMIT :limit
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<WorkflowInstance> claimNewSlaBreaches(@Param("limit") int limit);
 }

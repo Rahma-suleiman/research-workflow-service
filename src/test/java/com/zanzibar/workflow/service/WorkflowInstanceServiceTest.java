@@ -5,6 +5,7 @@ import com.zanzibar.workflow.dto.request.StartInstanceRequest;
 import com.zanzibar.workflow.dto.response.InstanceActionResponse;
 import com.zanzibar.workflow.dto.response.InstanceResponse;
 import com.zanzibar.workflow.enums.TriggerType;
+import com.zanzibar.workflow.enums.WorkflowEventType;
 import com.zanzibar.workflow.enums.WorkflowStatus;
 import com.zanzibar.workflow.exception.WorkflowException;
 import com.zanzibar.workflow.model.WorkflowDefinition;
@@ -20,12 +21,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class WorkflowInstanceServiceTest {
@@ -38,8 +42,9 @@ class WorkflowInstanceServiceTest {
     private final WorkflowTransitionLogRepository logs = mock(WorkflowTransitionLogRepository.class);
     private final WorkflowResolutionService resolution = mock(WorkflowResolutionService.class);
     private final WorkflowEngineService engine = new WorkflowEngineService(definitions, stages, logs);
+    private final WorkflowEventPublisher events = mock(WorkflowEventPublisher.class);
     private final WorkflowInstanceService service = new WorkflowInstanceService(
-        instances, definitions, stages, logs, resolution, engine);
+        instances, definitions, stages, logs, resolution, engine, events);
 
     private final UUID workflowId = UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e");
     private final UUID instanceId = UUID.fromString("0b7d1f8e-5a3c-4d2e-9f10-1a2b3c4d5e6f");
@@ -68,10 +73,12 @@ class WorkflowInstanceServiceTest {
         when(instances.findForUpdate(instanceId, TENANT)).thenReturn(Optional.of(instance));
         when(instances.findByIdAndTenantKey(instanceId, TENANT)).thenReturn(Optional.of(instance));
         when(instances.saveAndFlush(any(WorkflowInstance.class)))
-            .thenAnswer(invocation -> invocation.getArgument(0));
+            .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
 
         WorkflowStageConfig open = stage("NEW", "OPEN", "OPEN_TICKET", "AGENT", 1);
+        open.setSlaDays(5);
         WorkflowStageConfig cancel = stage("NEW", "CANCELLED", "CANCEL", "CUSTOMER", 2);
+        cancel.setSlaDays(2);
         when(stages.findByWorkflowDefinition_IdAndFromStatusAndActionKeyAndEnabledTrue(
             workflowId, "NEW", "OPEN_TICKET")).thenReturn(Optional.of(open));
         when(stages.findByWorkflowDefinition_IdAndFromStatusAndEnabledTrue(workflowId, "NEW"))
@@ -81,7 +88,7 @@ class WorkflowInstanceServiceTest {
 
         when(logs.findByTenantKeyAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
         when(logs.saveAndFlush(any(WorkflowTransitionLog.class)))
-            .thenAnswer(invocation -> invocation.getArgument(0));
+            .thenAnswer(invocation -> withGeneratedId(invocation.getArgument(0)));
     }
 
     @Test
@@ -96,6 +103,10 @@ class WorkflowInstanceServiceTest {
         assertTrue(result.created());
         assertEquals("NEW", result.instance().currentStatus());
         assertEquals(3, result.instance().workflowVersion());
+        // Due when the earliest outgoing SLA (CANCEL: 2 days) expires.
+        assertEquals(Duration.ofDays(2), Duration.between(
+            result.instance().statusEnteredAt(), result.instance().dueAt()));
+        verify(events).publish(eq(TENANT), eq(WorkflowEventType.INSTANCE_STARTED), any(), any());
         verify(instances).saveAndFlush(argThat(saved -> "acme-backend".equals(saved.getCreatedByClient())));
     }
 
@@ -122,6 +133,10 @@ class WorkflowInstanceServiceTest {
         assertFalse(response.replayed());
         assertEquals("OPEN", instance.getCurrentStatus());
         assertTrue(response.instance().terminal());
+        assertNull(instance.getDueAt(), "A terminal status has no SLA");
+        verify(events).publish(eq(TENANT), eq(WorkflowEventType.INSTANCE_TRANSITIONED),
+            eq(instanceId), argThat(data -> "OPEN".equals(data.get("toStatus"))
+                && Boolean.TRUE.equals(data.get("terminal"))));
         verify(logs).saveAndFlush(argThat(log -> instanceId.equals(log.getInstanceId())
             && "NEW".equals(log.getFromStatus()) && "acme-backend".equals(log.getClientId())));
     }
@@ -143,6 +158,23 @@ class WorkflowInstanceServiceTest {
 
         assertEquals(HttpStatus.FORBIDDEN, error.getStatus());
         assertEquals("NEW", instance.getCurrentStatus());
+        verifyNoInteractions(events);
+    }
+
+    @Test
+    void enteringStatusWithExternalApprovalAnnouncesIt() {
+        WorkflowStageConfig verify = stage("OPEN", "VERIFIED", "VERIFY", "SYSTEM", 3);
+        verify.setTriggerType(TriggerType.EXTERNAL_EVENT);
+        verify.setExternalApproval(true);
+        verify.setExternalSystemId("id-verifier");
+        when(stages.findByWorkflowDefinition_IdAndFromStatusAndEnabledTrue(workflowId, "OPEN"))
+            .thenReturn(List.of(verify));
+
+        service.perform(TENANT, "acme-backend", instanceId, "OPEN_TICKET", action(null, "AGENT", "key-1"));
+
+        verify(events).publish(eq(TENANT), eq(WorkflowEventType.INSTANCE_EXTERNAL_APPROVAL_REQUESTED),
+            eq(instanceId), argThat(data -> "id-verifier".equals(data.get("externalSystemId"))
+                && "VERIFY".equals(data.get("actionKey"))));
     }
 
     @Test
@@ -188,6 +220,14 @@ class WorkflowInstanceServiceTest {
         WorkflowException error = assertThrows(WorkflowException.class, () -> service.perform(
             "OTHER", "other-backend", instanceId, "OPEN_TICKET", action(null, "AGENT", "key-1")));
         assertEquals(HttpStatus.NOT_FOUND, error.getStatus());
+    }
+
+    /** Mimics JPA assigning a UUID on first save. */
+    private static <T> T withGeneratedId(T entity) {
+        if (ReflectionTestUtils.getField(entity, "id") == null) {
+            ReflectionTestUtils.setField(entity, "id", UUID.randomUUID());
+        }
+        return entity;
     }
 
     private InstanceActionRequest action(String expectedStatus, String role, String key) {

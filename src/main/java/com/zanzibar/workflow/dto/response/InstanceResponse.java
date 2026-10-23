@@ -15,6 +15,8 @@ public record InstanceResponse(
     String currentStatus,
     boolean terminal,
     List<AvailableActionResponse> availableActions,
+    Instant statusEnteredAt,
+    Instant dueAt,
     Instant createdAt,
     Instant updatedAt
 ) {}

@@ -5,8 +5,10 @@ import com.zanzibar.workflow.dto.request.StartInstanceRequest;
 import com.zanzibar.workflow.dto.response.AvailableActionResponse;
 import com.zanzibar.workflow.dto.response.InstanceActionResponse;
 import com.zanzibar.workflow.dto.response.InstanceResponse;
+import com.zanzibar.workflow.dto.response.OverdueInstanceResponse;
 import com.zanzibar.workflow.dto.response.TransitionHistoryResponse;
 import com.zanzibar.workflow.enums.TriggerType;
+import com.zanzibar.workflow.enums.WorkflowEventType;
 import com.zanzibar.workflow.exception.WorkflowException;
 import com.zanzibar.workflow.model.WorkflowDefinition;
 import com.zanzibar.workflow.model.WorkflowInstance;
@@ -21,10 +23,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -45,6 +51,7 @@ public class WorkflowInstanceService {
     private final WorkflowTransitionLogRepository logRepository;
     private final WorkflowResolutionService resolutionService;
     private final WorkflowEngineService engineService;
+    private final WorkflowEventPublisher eventPublisher;
 
     public WorkflowInstanceService(
         WorkflowInstanceRepository instanceRepository,
@@ -52,7 +59,8 @@ public class WorkflowInstanceService {
         WorkflowStageConfigRepository stageRepository,
         WorkflowTransitionLogRepository logRepository,
         WorkflowResolutionService resolutionService,
-        WorkflowEngineService engineService
+        WorkflowEngineService engineService,
+        WorkflowEventPublisher eventPublisher
     ) {
         this.instanceRepository = instanceRepository;
         this.definitionRepository = definitionRepository;
@@ -60,6 +68,7 @@ public class WorkflowInstanceService {
         this.logRepository = logRepository;
         this.resolutionService = resolutionService;
         this.engineService = engineService;
+        this.eventPublisher = eventPublisher;
     }
 
     public record StartResult(InstanceResponse instance, boolean created) {}
@@ -91,13 +100,34 @@ public class WorkflowInstanceService {
         instance.setWorkflowVersion(workflow.getWorkflowVersion());
         instance.setCurrentStatus(normalize(workflow.getInitialStatus()));
         instance.setCreatedByClient(clientId);
+        List<WorkflowStageConfig> outgoing = enterStatus(instance, workflow);
 
+        WorkflowInstance saved;
         try {
-            return new StartResult(toResponse(instanceRepository.saveAndFlush(instance), null), true);
+            saved = instanceRepository.saveAndFlush(instance);
         } catch (DataIntegrityViolationException exception) {
             throw new WorkflowException(HttpStatus.CONFLICT,
                 "This subject's instance was started concurrently. Retry to fetch it.", exception);
         }
+
+        Map<String, Object> data = subjectData(saved, workflow);
+        data.put("status", saved.getCurrentStatus());
+        data.put("dueAt", text(saved.getDueAt()));
+        eventPublisher.publish(tenantKey, WorkflowEventType.INSTANCE_STARTED, saved.getId(), data);
+        publishExternalApprovals(saved, workflow, outgoing);
+        return new StartResult(toResponse(saved, workflow, null), true);
+    }
+
+    /** The tenant's instances whose SLA due date has passed, earliest first (up to 200). */
+    @Transactional(readOnly = true)
+    public List<OverdueInstanceResponse> overdue(String tenantKey) {
+        return instanceRepository
+            .findTop200ByTenantKeyAndDueAtBeforeOrderByDueAtAsc(tenantKey, Instant.now())
+            .stream()
+            .map(instance -> new OverdueInstanceResponse(instance.getId(),
+                instance.getSubjectType(), instance.getSubjectId(), instance.getCurrentStatus(),
+                instance.getStatusEnteredAt(), instance.getDueAt(), instance.isSlaBreachNotified()))
+            .toList();
     }
 
     @Transactional(readOnly = true)
@@ -191,17 +221,94 @@ public class WorkflowInstanceService {
         log.setIdempotencyKey(idempotencyKey);
 
         instance.setCurrentStatus(toStatus);
+        List<WorkflowStageConfig> outgoing = enterStatus(instance, workflow);
+        WorkflowTransitionLog saved;
         try {
             instanceRepository.saveAndFlush(instance);
-            WorkflowTransitionLog saved = logRepository.saveAndFlush(log);
-            return new InstanceActionResponse(saved.getId(), action, fromStatus, toStatus,
-                false, toResponse(instance, workflow, null));
+            saved = logRepository.saveAndFlush(log);
         } catch (DataIntegrityViolationException exception) {
             // The idempotency key was taken concurrently by another instance's action.
             throw new WorkflowException(HttpStatus.CONFLICT,
                 "A request with this idempotency key was processed concurrently. "
                     + "Retry the same request with the same key.", exception);
         }
+
+        // Written in this transaction: the events commit or roll back with the status change.
+        Map<String, Object> data = subjectData(instance, workflow);
+        data.put("transitionLogId", saved.getId().toString());
+        data.put("actionKey", action);
+        data.put("fromStatus", fromStatus);
+        data.put("toStatus", toStatus);
+        data.put("triggerType", stage.getTriggerType().name());
+        data.put("actorId", saved.getActorId());
+        data.put("actorRole", saved.getActorRole());
+        data.put("comments", saved.getComments());
+        data.put("terminal", outgoing.isEmpty());
+        data.put("dueAt", text(instance.getDueAt()));
+        eventPublisher.publish(tenantKey, WorkflowEventType.INSTANCE_TRANSITIONED,
+            instance.getId(), data);
+        publishExternalApprovals(instance, workflow, outgoing);
+
+        return new InstanceActionResponse(saved.getId(), action, fromStatus, toStatus,
+            false, toResponse(instance, workflow, null));
+    }
+
+    /**
+     * Records entry into the instance's current status and computes its SLA:
+     * due when the earliest outgoing action with slaDays expires.
+     */
+    private List<WorkflowStageConfig> enterStatus(
+        WorkflowInstance instance,
+        WorkflowDefinition workflow
+    ) {
+        Instant now = Instant.now();
+        List<WorkflowStageConfig> outgoing = stageRepository
+            .findByWorkflowDefinition_IdAndFromStatusAndEnabledTrue(
+                workflow.getId(), instance.getCurrentStatus());
+        instance.setStatusEnteredAt(now);
+        instance.setDueAt(outgoing.stream()
+            .map(WorkflowStageConfig::getSlaDays)
+            .filter(Objects::nonNull)
+            .min(Integer::compare)
+            .map(days -> now.plus(Duration.ofDays(days)))
+            .orElse(null));
+        instance.setSlaBreachNotified(false);
+        return outgoing;
+    }
+
+    /** Tells the calling system which external approvals the new status is waiting for. */
+    private void publishExternalApprovals(
+        WorkflowInstance instance,
+        WorkflowDefinition workflow,
+        List<WorkflowStageConfig> outgoing
+    ) {
+        for (WorkflowStageConfig stage : outgoing) {
+            if (!stage.isExternalApproval()) {
+                continue;
+            }
+            Map<String, Object> data = subjectData(instance, workflow);
+            data.put("status", instance.getCurrentStatus());
+            data.put("actionKey", stage.getActionKey());
+            data.put("toStatus", stage.getToStatus());
+            data.put("triggerType", stage.getTriggerType().name());
+            data.put("externalSystemId", stage.getExternalSystemId());
+            eventPublisher.publish(instance.getTenantKey(),
+                WorkflowEventType.INSTANCE_EXTERNAL_APPROVAL_REQUESTED, instance.getId(), data);
+        }
+    }
+
+    private Map<String, Object> subjectData(WorkflowInstance instance, WorkflowDefinition workflow) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("instanceId", instance.getId().toString());
+        data.put("subjectType", instance.getSubjectType());
+        data.put("subjectId", instance.getSubjectId());
+        data.put("workflowKey", workflow.getWorkflowKey());
+        data.put("workflowVersion", workflow.getWorkflowVersion());
+        return data;
+    }
+
+    private String text(Instant value) {
+        return value == null ? null : value.toString();
     }
 
     private InstanceActionResponse replayOrReject(
@@ -267,7 +374,8 @@ public class WorkflowInstanceService {
         return new InstanceResponse(instance.getId(), instance.getSubjectType(),
             instance.getSubjectId(), workflow.getId(), workflow.getWorkflowKey(),
             workflow.getWorkflowVersion(), instance.getCurrentStatus(), outgoing.isEmpty(),
-            actions, instance.getCreatedAt(), instance.getUpdatedAt());
+            actions, instance.getStatusEnteredAt(), instance.getDueAt(),
+            instance.getCreatedAt(), instance.getUpdatedAt());
     }
 
     private boolean mayPerform(WorkflowStageConfig stage, String role) {

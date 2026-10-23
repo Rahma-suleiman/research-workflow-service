@@ -41,6 +41,16 @@ public class WorkflowInstance {
     @Column(name = "current_status", nullable = false, length = 80)
     private String currentStatus;
 
+    @Column(name = "status_entered_at", nullable = false)
+    private Instant statusEnteredAt;
+
+    /** When the earliest outgoing action with slaDays falls due; null when none has one. */
+    @Column(name = "due_at")
+    private Instant dueAt;
+
+    @Column(name = "sla_breach_notified", nullable = false)
+    private boolean slaBreachNotified = false;
+
     @Version
     @Column(name = "lock_version", nullable = false)
     private Long lockVersion = 0L;
@@ -116,6 +126,30 @@ public class WorkflowInstance {
 
     public void setCurrentStatus(String currentStatus) {
         this.currentStatus = currentStatus;
+    }
+
+    public Instant getStatusEnteredAt() {
+        return statusEnteredAt;
+    }
+
+    public void setStatusEnteredAt(Instant statusEnteredAt) {
+        this.statusEnteredAt = statusEnteredAt;
+    }
+
+    public Instant getDueAt() {
+        return dueAt;
+    }
+
+    public void setDueAt(Instant dueAt) {
+        this.dueAt = dueAt;
+    }
+
+    public boolean isSlaBreachNotified() {
+        return slaBreachNotified;
+    }
+
+    public void setSlaBreachNotified(boolean slaBreachNotified) {
+        this.slaBreachNotified = slaBreachNotified;
     }
 
     public Long getLockVersion() {

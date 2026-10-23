@@ -14,6 +14,7 @@ import com.zanzibar.workflow.model.WorkflowTenant;
 import com.zanzibar.workflow.repository.WorkflowClientAppRepository;
 import com.zanzibar.workflow.repository.WorkflowTenantRepository;
 import com.zanzibar.workflow.security.SecretCipher;
+import com.zanzibar.workflow.security.SecretGenerator;
 import com.zanzibar.workflow.security.WorkflowPrincipal;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -21,9 +22,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.security.SecureRandom;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -37,7 +36,6 @@ import java.util.regex.Pattern;
 public class TenantAdministrationService {
 
     private static final Pattern TENANT_KEY_PATTERN = Pattern.compile("[A-Z][A-Z0-9_]*");
-    private static final int GENERATED_SECRET_BYTES = 32;
 
     private final WorkflowTenantRepository tenantRepository;
     private final WorkflowClientAppRepository clientRepository;
@@ -45,7 +43,6 @@ public class TenantAdministrationService {
     private final SecretCipher secretCipher;
     private final String environmentSigningSecret;
     private final Set<String> reservedClientIds;
-    private final SecureRandom random = new SecureRandom();
 
     public TenantAdministrationService(
         WorkflowTenantRepository tenantRepository,
@@ -157,11 +154,11 @@ public class TenantAdministrationService {
     }
 
     private IssuedCredentialsResponse issueCredentials(WorkflowClientApp client, String message) {
-        String password = generateSecret();
+        String password = SecretGenerator.generate();
         String signingSecret = null;
         client.setPasswordHash(passwordEncoder.encode(password));
         if (client.getKind() == ClientAppKind.SERVICE) {
-            signingSecret = generateSecret();
+            signingSecret = SecretGenerator.generate();
             client.setSigningSecretEncrypted(
                 secretCipher.encrypt(signingSecret, client.getClientId()));
         }
@@ -169,12 +166,6 @@ public class TenantAdministrationService {
         return new IssuedCredentialsResponse(saved.getClientId(), saved.getTenantKey(),
             saved.getKind(), password, signingSecret,
             message + " Store these values now; they cannot be retrieved again.");
-    }
-
-    private String generateSecret() {
-        byte[] bytes = new byte[GENERATED_SECRET_BYTES];
-        random.nextBytes(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     private WorkflowTenant getTenant(String key) {

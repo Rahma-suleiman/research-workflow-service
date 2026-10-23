@@ -26,7 +26,8 @@
 - Actor HMAC signing secret variable: WORKFLOW_ACTOR_SIGNING_SECRET
 - Client secret encryption key variable: WORKFLOW_SECRET_ENCRYPTION_KEY
   (Base64 of 32 random bytes: `openssl rand -base64 32`). Losing it makes stored
-  SERVICE client signing secrets unreadable; rotate those clients' credentials.
+  SERVICE client and webhook signing secrets unreadable; rotate those clients'
+  credentials and the webhooks' secrets.
 
 Tenant client apps (one ADMIN and/or SERVICE client per project) are created by
 the platform administrator under /api/platform. Their passwords and signing

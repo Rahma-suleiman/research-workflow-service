@@ -4,6 +4,7 @@ import com.zanzibar.workflow.dto.request.InstanceActionRequest;
 import com.zanzibar.workflow.dto.request.StartInstanceRequest;
 import com.zanzibar.workflow.dto.response.InstanceActionResponse;
 import com.zanzibar.workflow.dto.response.InstanceResponse;
+import com.zanzibar.workflow.dto.response.OverdueInstanceResponse;
 import com.zanzibar.workflow.dto.response.TransitionHistoryResponse;
 import com.zanzibar.workflow.security.WorkflowPrincipal;
 import com.zanzibar.workflow.service.TenantAdministrationService;
@@ -52,6 +53,14 @@ public class WorkflowInstanceController {
             instanceService.start(principal.tenantKey(), principal.clientId(), request);
         return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
             .body(result.instance());
+    }
+
+    @GetMapping("/overdue")
+    @PreAuthorize("hasAnyRole('WORKFLOW_SERVICE', 'ADMINISTRATOR')")
+    public ResponseEntity<List<OverdueInstanceResponse>> listOverdue(
+        @AuthenticationPrincipal WorkflowPrincipal principal
+    ) {
+        return ResponseEntity.ok(instanceService.overdue(principal.tenantKey()));
     }
 
     @GetMapping("/{instanceId}")

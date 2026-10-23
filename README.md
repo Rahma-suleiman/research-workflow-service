@@ -64,6 +64,8 @@ Tenant administrator (`ADMINISTRATOR`: the environment admin for `DEFAULT`, or a
 - `POST /api/workflows/{id}/publish` — validate, publish, and archive the previous version of the same key.
 - `GET /api/workflows/{id}/validation` — read-only graph and configuration report.
 - `GET /api/workflows/coverage` — whether every active subject type has exactly one active workflow.
+- `GET|POST /api/webhooks`, `PUT /api/webhooks/{id}`, `POST /api/webhooks/{id}/rotate-secret` — event subscriptions.
+- `GET /api/webhooks/{id}/deliveries`, `POST /api/webhooks/deliveries/{id}/retry` — delivery log and manual retry.
 
 Service account (`WORKFLOW_SERVICE`: the environment service account for `DEFAULT`, or a tenant's SERVICE client):
 
@@ -73,6 +75,7 @@ Service account (`WORKFLOW_SERVICE`: the environment service account for `DEFAUL
 - `GET /api/instances/{id}`, `GET /api/instances?subjectType=&subjectId=` — current status and available actions (`?actorRole=` filters them). Also readable by the tenant administrator.
 - `POST /api/instances/{id}/actions/{actionKey}` — apply a signed action to the stored status.
 - `GET /api/instances/{id}/history` — applied transitions.
+- `GET /api/instances/overdue` — instances past their SLA due date (also readable by the tenant administrator).
 - `POST /api/transitions/execute` — validate-only mode: validate and audit one transition.
 
 Action and transition requests also require the `X-Actor-Signature` header described in `docs/ACTOR_SIGNATURE.md`.
@@ -83,7 +86,8 @@ Action and transition requests also require the `X-Actor-Signature` header descr
 2. Register your roles and subject types (via the API, or a SQL seed like `scripts/examples/research-permit-registry.sql`).
 3. Create a workflow with its `initialStatus` and subject types, add stages, check `/validation`, then `/publish`.
 4. In your backend, call `POST /api/instances` when a subject is created, and store the returned instance id.
-5. Show users the `availableActions` for their role. Send each action to `/api/instances/{id}/actions/{actionKey}`, signed with your SERVICE client's signing secret, with a unique idempotency key and the `expectedStatus` the user saw.
+5. Optionally register a webhook (`docs/WEBHOOKS_AND_SLA.md`) to be told about status changes, SLA breaches and external approvals.
+6. Show users the `availableActions` for their role. Send each action to `/api/instances/{id}/actions/{actionKey}`, signed with your SERVICE client's signing secret, with a unique idempotency key and the `expectedStatus` the user saw.
 
 In validate-only mode, call `/resolve` instead and pin the workflow id and version yourself. For each action, send a signed `/api/transitions/execute` request with a unique idempotency key. Apply the returned `toStatus` with a compare-and-set update (`... WHERE status = :fromStatus`).
 
@@ -120,5 +124,5 @@ Then confirm the application starts with the real deployment configuration. Open
 1. Generic vocabulary: registries, subject types, configurable initial status (done).
 2. Tenants and client apps: per-project credentials, signing secrets, and data isolation (done).
 3. Workflow instances: the engine owns each subject's current status and applies transitions atomically (done).
-4. Integration: webhooks/outbox, SLA tracking, external-approval callbacks.
+4. Integration: webhooks/outbox, SLA tracking, external-approval events (done). See `docs/WEBHOOKS_AND_SLA.md`.
 5. Packaging: Docker image and client SDKs.

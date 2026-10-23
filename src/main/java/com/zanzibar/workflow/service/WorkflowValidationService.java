@@ -173,6 +173,12 @@ public class WorkflowValidationService {
                 errors.add("Stage '" + stage.getName()
                     + "' requires externalSystemId when externalApproval is true.");
             }
+            if (stage.isExternalApproval()
+                    && stage.getTriggerType() != TriggerType.EXTERNAL_EVENT) {
+                warnings.add("External approval stage '" + stage.getName()
+                    + "' uses trigger " + stage.getTriggerType() + ". The external system's"
+                    + " answer is normally applied with an EXTERNAL_EVENT trigger.");
+            }
             if (stage.isEnabled()) {
                 enabledStages.add(stage);
             }
