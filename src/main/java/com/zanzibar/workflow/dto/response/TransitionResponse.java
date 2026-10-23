@@ -6,7 +6,7 @@ import java.util.UUID;
 public record TransitionResponse(
     UUID workflowDefinitionId,
     Integer workflowVersion,
-    UUID applicationId,
+    String subjectId,
     String fromStatus,
     String toStatus,
     String actionKey,

@@ -12,7 +12,7 @@ public interface WorkflowTransitionLogRepository
         extends JpaRepository<WorkflowTransitionLog, UUID> {
 
     List<WorkflowTransitionLog>
-    findByApplicationIdOrderByExecutedAtDesc(UUID applicationId);
+    findBySubjectIdOrderByExecutedAtDesc(String subjectId);
 
     List<WorkflowTransitionLog>
     findByWorkflowDefinitionIdAndWorkflowVersionOrderByExecutedAtDesc(

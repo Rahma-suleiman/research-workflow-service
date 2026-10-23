@@ -36,21 +36,21 @@ public interface WorkflowDefinitionRepository
     @Query("""
         SELECT DISTINCT w
         FROM WorkflowDefinition w
-        LEFT JOIN w.applicableApplicationTypes applicationType
+        LEFT JOIN w.subjectTypes subjectType
         WHERE w.status = :status
           AND w.active = true
           AND (
-              w.scope = :allApplications
+              w.scope = :allTypes
               OR (
                   w.scope = :selectedTypes
-                  AND applicationType = :applicationType
+                  AND subjectType = :subjectType
               )
           )
         """)
-    List<WorkflowDefinition> findActivePublishedForApplicationType(
+    List<WorkflowDefinition> findActivePublishedForSubjectType(
         @Param("status") WorkflowStatus status,
-        @Param("allApplications") WorkflowScope allApplications,
+        @Param("allTypes") WorkflowScope allTypes,
         @Param("selectedTypes") WorkflowScope selectedTypes,
-        @Param("applicationType") String applicationType
+        @Param("subjectType") String subjectType
     );
 }

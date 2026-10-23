@@ -1,21 +1,31 @@
-# Research Workflow Service
+# Workflow Engine
 
-Spring Boot workflow-definition and transition-validation service for the Research Permit System.
+A reusable Spring Boot service for defining versioned approval workflows and
+validating status transitions for any project. Each project registers its own
+roles and subject types (an application type, an order type, a document type,
+...) and designs workflows as a graph of statuses and actions.
 
-## Current scope
+The engine validates and audits each transition. The calling system stores the
+subject's current status and applies the returned `toStatus`.
 
-This package contains Phase 1 hardening and Phase 2 workflow validation diagnostics. It is not yet integrated with the Research Permit backend or frontend and is not certified for production deployment.
+## Concepts
+
+- **Subject type**: the kind of record a workflow governs. Registered under `/api/subject-types`.
+- **Role**: a role your users hold. Registered under `/api/roles`. `SYSTEM` is built in and is used for `SYSTEM` and `EXTERNAL_EVENT` triggers.
+- **Workflow definition**: versioned (`DRAFT` → `PUBLISHED` → `ARCHIVED`), with an `initialStatus` and a scope (`ALL_TYPES` or `SELECTED_TYPES`).
+- **Stage**: one allowed transition `fromStatus` + `actionKey` → `toStatus`, with assigned roles, a trigger type (`HUMAN`, `SYSTEM` or `EXTERNAL_EVENT`), optional SLA, and a comments requirement.
+- **Subject**: one record in your system, identified by `subjectId` (any string ID).
 
 ## Requirements
 
 - Java 21
 - PostgreSQL
-- Maven (or the included Maven Wrapper, if its configured distribution can be downloaded)
-- Database `research_workflow_db` and a database user with the required schema privileges
+- Maven (or the included Maven Wrapper)
+- Database `workflow_engine_db` (or set `WORKFLOW_DB_URL`) and a database user with the required schema privileges
 
 ## Run locally
 
-Configure the environment variables documented in `src/main/resources/application.properties`, then run:
+Set the environment variables listed in `.env.example`, then run:
 
 ```bash
 ./mvnw spring-boot:run
@@ -30,24 +40,42 @@ chmod +x mvnw
 
 The service listens on port `8081`. Swagger UI is at `http://localhost:8081/swagger-ui/index.html`.
 
-## Phase 2 diagnostic endpoints
+## Endpoints
 
-- `GET /api/workflows/{workflowId}/validation` — read-only configuration/graph validation report.
-- `GET /api/workflows/coverage` — coverage report for all supported application types.
-- `GET /api/workflows/resolve?applicationType=FOREIGN_RESEARCHER` — resolves one active published workflow for a new application.
-- `GET /api/workflows/{workflowId}/versions/{version}` — retrieves a pinned non-draft version.
+Administrator account (`ADMINISTRATOR`):
 
-Administrative endpoints require the configured administrator account. Resolution endpoints require the workflow service account. Transition validation also requires the trusted actor signature described in `docs/ACTOR_SIGNATURE.md`.
+- `GET|POST /api/roles`, `PUT /api/roles/{key}` — role registry.
+- `GET|POST /api/subject-types`, `PUT /api/subject-types/{key}` — subject-type registry.
+- `POST /api/workflows`, `PUT /api/workflows/{id}` — create a draft, or edit a draft's settings.
+- `POST|PUT|DELETE /api/workflows/{id}/stages[/{stageId}]` — edit the transitions of a draft.
+- `POST /api/workflows/{id}/versions` — copy a published or archived workflow into a new draft.
+- `POST /api/workflows/{id}/publish` — validate, publish, and archive the previous version of the same key.
+- `GET /api/workflows/{id}/validation` — read-only graph and configuration report.
+- `GET /api/workflows/coverage` — whether every active subject type has exactly one active workflow.
+
+Service account (`WORKFLOW_SERVICE`, used by the calling backend):
+
+- `GET /api/workflows/resolve?subjectType=PURCHASE_ORDER` — the active workflow for a new subject; store its id and version on the subject.
+- `GET /api/workflows/{id}/versions/{version}` — the pinned version for an existing subject.
+- `POST /api/transitions/execute` — validate and audit one transition. Also requires the `X-Actor-Signature` header described in `docs/ACTOR_SIGNATURE.md`.
+
+## Onboarding a new project
+
+1. Register your roles and subject types (via the API, or a SQL seed like `scripts/examples/research-permit-registry.sql`).
+2. Create a workflow with its `initialStatus` and subject types, add stages, check `/validation`, then `/publish`.
+3. In your backend, call `/resolve` when a subject is created and pin the workflow id and version.
+4. For each user action, send a signed `/api/transitions/execute` request with a unique idempotency key. Apply the returned `toStatus` with a compare-and-set update (`... WHERE status = :fromStatus`).
 
 ## Database verification
 
 Run the read-only SQL diagnostics in `scripts/verify-workflow.sql`:
 
 ```bash
-psql -d research_workflow_db -f scripts/verify-workflow.sql
+psql -d workflow_engine_db -f scripts/verify-workflow.sql
 ```
 
-See `docs/PHASE0_BACKUP_AND_ROLLBACK.md` and `docs/PHASE2_WORKFLOW_VALIDATION.md` before making changes.
+See `docs/PHASE0_BACKUP_AND_ROLLBACK.md` before applying migrations, and
+`docs/GENERIC_ENGINE_MIGRATION.md` when upgrading an existing Research Permit installation.
 
 ## Tests
 
@@ -55,17 +83,21 @@ See `docs/PHASE0_BACKUP_AND_ROLLBACK.md` and `docs/PHASE2_WORKFLOW_VALIDATION.md
 ./mvnw clean verify
 ```
 
-A successful build/test run has not yet been confirmed in the packaging environment because Maven could not be downloaded there. Run this command in the development environment and fix any reported failures before integration.
+The integration tests use the separate `workflow_engine_test_db` database defined in `src/test/resources/application-test.properties`.
 
-## Scope exclusions
+## Production
 
-This version does not include the Research Permit backend client, frontend changes, deployment automation, or production release sign-off. Those are later phases.
+See `docs/PHASE3_DATA_SECURITY_HARDENING.md` for security and transition hardening, and
+`docs/PRODUCTION_READINESS_GATE.md` for the evidence required before a production release.
+Use `.env.example` only as a reference for variable names: replace every example value, and never commit real secrets.
 
+Set `SPRING_PROFILES_ACTIVE=prod` and inject strong secrets through a secret manager or protected environment.
+Then confirm the application starts with the real deployment configuration. OpenAPI/Swagger is disabled by default in production.
 
-## Phase 3 hardening additions
+## Roadmap
 
-See `docs/PHASE3_DATA_SECURITY_HARDENING.md` for the latest security and transition hardening changes and `docs/PRODUCTION_READINESS_GATE.md` for evidence required before a production release. Use `.env.example` as a variable-name reference only; replace all example values and never commit real secrets.
-
-Production profile: set `SPRING_PROFILES_ACTIVE=prod`, inject strong secrets through a secret manager/protected environment, and verify the application starts with the real deployment configuration. OpenAPI/Swagger is disabled by default in production.
-
-The transition endpoint validates and audits a transition decision; it does not persist status to the Research Permit database. Backend integration and end-to-end status persistence remain outside this package.
+1. Generic vocabulary: registries, subject types, configurable initial status (done).
+2. Tenants and client apps: per-project credentials, signing secrets, and data isolation.
+3. Workflow instances: the engine owns each subject's current status and applies transitions atomically.
+4. Integration: webhooks/outbox, SLA tracking, external-approval callbacks.
+5. Packaging: Docker image and client SDKs.

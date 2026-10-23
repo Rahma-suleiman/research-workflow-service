@@ -7,7 +7,7 @@ import java.util.UUID;
 
 /**
  * Read-only diagnostic report. A publishable result means the configured
- * graph passed these checks; it is not a guarantee that the permit backend
+ * graph passed these checks; it is not a guarantee that the calling system
  * uses the same status/action contract.
  */
 public record WorkflowValidationResponse(

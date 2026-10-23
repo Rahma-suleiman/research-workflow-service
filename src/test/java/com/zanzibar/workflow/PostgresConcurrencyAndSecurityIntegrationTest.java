@@ -1,5 +1,6 @@
 package com.zanzibar.workflow;
 
+import com.jayway.jsonpath.JsonPath;
 import com.zanzibar.workflow.dto.request.ExecuteTransitionRequest;
 import com.zanzibar.workflow.enums.TriggerType;
 import com.zanzibar.workflow.enums.WorkflowScope;
@@ -43,7 +44,7 @@ import org.springframework.http.MediaType;
 
 /**
  * Integration tests that use a real PostgreSQL database. The test profile is
- * pinned to research_workflow_test_db; it never uses research_workflow_db.
+ * pinned to workflow_engine_test_db; it never uses workflow_engine_db.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -58,12 +59,17 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
     @Autowired private WorkflowActorSignatureService actorSignatureService;
 
     private final String testPrefix = "it-" + UUID.randomUUID();
+    private final String registryPrefix =
+        "IT_" + UUID.randomUUID().toString().replace("-", "").toUpperCase() + "_";
+    private final String subjectType = registryPrefix + "TYPE";
     private UUID workflowId;
     private String idempotencyKey;
 
     @BeforeEach
     void createIsolatedPublishedWorkflow() {
         idempotencyKey = testPrefix + "-same-key";
+        jdbc.update("INSERT INTO workflow_subject_types (type_key, name) VALUES (?, ?)",
+            subjectType, "Integration test subject type");
         WorkflowDefinition workflow = new WorkflowDefinition();
         workflow.setWorkflowKey("it-workflow-" + UUID.randomUUID());
         workflow.setName("PostgreSQL integration test workflow");
@@ -72,7 +78,8 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
         workflow.setStatus(WorkflowStatus.PUBLISHED);
         workflow.setWorkflowVersion(1);
         workflow.setActive(true);
-        workflow.setApplicableApplicationTypes(java.util.Set.of("LOCAL_RESEARCHER"));
+        workflow.setInitialStatus("DRAFT");
+        workflow.setSubjectTypes(java.util.Set.of(subjectType));
 
         WorkflowStageConfig stage = new WorkflowStageConfig();
         stage.setName("Submit application");
@@ -97,13 +104,16 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
             definitions.deleteById(workflowId);
             definitions.flush();
         }
+        jdbc.update("DELETE FROM workflow_definitions WHERE workflow_key LIKE ?", testPrefix + "%");
+        jdbc.update("DELETE FROM workflow_subject_types WHERE type_key LIKE ?", registryPrefix + "%");
+        jdbc.update("DELETE FROM workflow_roles WHERE role_key LIKE ?", registryPrefix + "%");
     }
 
     @Test
     void simultaneousSameIdempotencyKeyCreatesAtMostOneAuditRow() throws Exception {
-        UUID applicationId = UUID.randomUUID();
+        String subjectId = UUID.randomUUID().toString();
         ExecuteTransitionRequest request = new ExecuteTransitionRequest(
-            workflowId, 1, applicationId, "DRAFT", "SUBMIT", TriggerType.HUMAN,
+            workflowId, 1, subjectId, "DRAFT", "SUBMIT", TriggerType.HUMAN,
             "test-applicant", "APPLICANT", "", idempotencyKey
         );
         CountDownLatch ready = new CountDownLatch(2);
@@ -212,13 +222,90 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
             .andExpect(status().isOk());
     }
 
+    @Test
+    void registryEndpointsRequireAdministratorRole() throws Exception {
+        mockMvc.perform(get("/api/roles").header("Authorization", serviceAuth()))
+            .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/subject-types").header("Authorization", adminAuth()))
+            .andExpect(status().isOk());
+    }
+
+    /**
+     * A project unrelated to research permits configures its own vocabulary and
+     * workflow entirely over HTTP and runs a transition on a non-UUID subject.
+     */
+    @Test
+    void anyProjectCanConfigureAndUseItsOwnWorkflowOverHttp() throws Exception {
+        String role = registryPrefix + "AGENT";
+        String type = registryPrefix + "TICKET";
+
+        mockMvc.perform(post("/api/roles").header("Authorization", adminAuth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"key\":\"%s\",\"name\":\"Support agent\"}".formatted(role)))
+            .andExpect(status().isCreated());
+        mockMvc.perform(post("/api/subject-types").header("Authorization", adminAuth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"key\":\"%s\",\"name\":\"Support ticket\"}".formatted(type)))
+            .andExpect(status().isCreated());
+
+        String created = mockMvc.perform(post("/api/workflows").header("Authorization", adminAuth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"workflowKey":"%s-tickets","name":"Ticket flow","initialStatus":"NEW",
+                     "scope":"SELECTED_TYPES","subjectTypes":["%s"]}
+                    """.formatted(testPrefix, type)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.initialStatus").value("NEW"))
+            .andReturn().getResponse().getContentAsString();
+        String ticketWorkflowId = JsonPath.read(created, "$.id");
+
+        mockMvc.perform(post("/api/workflows/" + ticketWorkflowId + "/stages")
+                .header("Authorization", adminAuth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name":"Open ticket","fromStatus":"NEW","toStatus":"OPEN",
+                     "actionKey":"OPEN_TICKET","assignedRole":"%s","triggerType":"HUMAN",
+                     "stageOrder":1,"requiresComments":false,"externalApproval":false,"enabled":true}
+                    """.formatted(role)))
+            .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/workflows/" + ticketWorkflowId + "/publish")
+                .header("Authorization", adminAuth()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("PUBLISHED"));
+
+        mockMvc.perform(get("/api/workflows/resolve").param("subjectType", type)
+                .header("Authorization", serviceAuth()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value(ticketWorkflowId));
+
+        ExecuteTransitionRequest request = new ExecuteTransitionRequest(
+            UUID.fromString(ticketWorkflowId), 1, "TICKET-2026-0042", "NEW", "OPEN_TICKET",
+            TriggerType.HUMAN, "agent-7", role, "", testPrefix + "-ticket");
+        mockMvc.perform(post("/api/transitions/execute")
+                .header("Authorization", serviceAuth())
+                .header("X-Actor-Signature", actorSignatureService.signRequest(request))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(transitionJson(request)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.subjectId").value("TICKET-2026-0042"))
+            .andExpect(jsonPath("$.toStatus").value("OPEN"));
+    }
+
+    private String adminAuth() {
+        return basic("workflow_test_admin", "test-admin-password-not-for-production");
+    }
+
+    private String serviceAuth() {
+        return basic("workflow_test_service", "test-service-password-not-for-production");
+    }
 
     private String transitionJson(ExecuteTransitionRequest request) {
         return """
             {
               "workflowDefinitionId": "%s",
               "workflowVersion": %d,
-              "applicationId": "%s",
+              "subjectId": "%s",
               "currentStatus": "%s",
               "actionKey": "%s",
               "triggerType": "%s",
@@ -230,7 +317,7 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
             """.formatted(
                 request.workflowDefinitionId(),
                 request.workflowVersion(),
-                request.applicationId(),
+                request.subjectId(),
                 request.currentStatus(),
                 request.actionKey(),
                 request.triggerType().name(),
@@ -245,7 +332,7 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
         return new ExecuteTransitionRequest(
             workflowId,
             1,
-            UUID.randomUUID(),
+            UUID.randomUUID().toString(),
             "DRAFT",
             "SUBMIT",
             TriggerType.HUMAN,

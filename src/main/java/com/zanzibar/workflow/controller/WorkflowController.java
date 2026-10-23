@@ -2,6 +2,7 @@ package com.zanzibar.workflow.controller;
 
 import com.zanzibar.workflow.dto.request.CreateWorkflowRequest;
 import com.zanzibar.workflow.dto.request.CreateWorkflowStageRequest;
+import com.zanzibar.workflow.dto.request.UpdateWorkflowRequest;
 import com.zanzibar.workflow.dto.response.WorkflowResponse;
 import com.zanzibar.workflow.dto.response.WorkflowValidationResponse;
 import com.zanzibar.workflow.dto.response.WorkflowCoverageResponse;
@@ -57,6 +58,17 @@ public class WorkflowController {
     ) {
         return ResponseEntity.ok(
             managementService.getWorkflow(workflowId)
+        );
+    }
+
+    @PutMapping("/{workflowId}")
+    @PreAuthorize("hasRole('ADMINISTRATOR')")
+    public ResponseEntity<WorkflowResponse> updateWorkflow(
+        @PathVariable UUID workflowId,
+        @Valid @RequestBody UpdateWorkflowRequest request
+    ) {
+        return ResponseEntity.ok(
+            managementService.updateWorkflow(workflowId, request)
         );
     }
 
@@ -125,22 +137,22 @@ public class WorkflowController {
     }
 
     /**
-     * Shows whether every supported application type has exactly one
+     * Shows whether every active registered subject type has exactly one
      * active published workflow. Administrators can use this before publishing.
      */
     @GetMapping("/coverage")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowCoverageResponse> inspectWorkflowCoverage() {
-        return ResponseEntity.ok(validationService.inspectApplicationTypeCoverage());
+        return ResponseEntity.ok(validationService.inspectSubjectTypeCoverage());
     }
 
     @GetMapping("/resolve")
     @PreAuthorize("hasRole('WORKFLOW_SERVICE')")
     public ResponseEntity<WorkflowResponse> resolveWorkflow(
-        @RequestParam String applicationType
+        @RequestParam String subjectType
     ) {
         return ResponseEntity.ok(
-            resolutionService.resolveForNewApplication(applicationType)
+            resolutionService.resolveForNewSubject(subjectType)
         );
     }
 
@@ -155,34 +167,3 @@ public class WorkflowController {
         );
     }
 }
-// read more on
-
-// then explain to be briefly using simple english why are we doing these steps"Our next steps
-// Milestone 1 — Build and existing tests
-// Passed
-// Your latest log is the evidence.
-// Milestone 2 — PostgreSQL concurrency tests
-// Test simultaneous updates, duplicate transition requests, and workflow publication behavior using a real PostgreSQL database.
-// Milestone 3 — Remaining security checks
-// Check authentication, role permissions, request validation, HMAC signatures, production configuration, and database access.
-// Milestone 4 — Evidence and decision
-// Record which checks passed and which issues must be fixed before production"and they were for which phase ,also briefly write step by step to 
-
-// these are these "My assessment: it has a good foundation, but I would not yet certify it as production-ready. You have already completed meaningful work: PostgreSQL-backed persistence, Flyway migrations, authenticated endpoints, role-based authorization, HMAC actor-signature verification, idempotency handling, optimistic-locking tests, and a successful Maven verification run."that have been worked on my project what is each for its meaning purpose and its role in this workflow service
-
-// what i have finished for this Standalone workflow service
-// 2. Does this mean the workflow service is finished?
-// The core standalone implementation has reached a good baseline, but I would not declare it permanently finished or certified for production yet.
-
-// Here is the current position:
-// Area	Status
-// PostgreSQL persistence and Flyway migrations	Implemented
-// Authentication and role-based authorization	Implemented
-// HMAC actor-signature verification	Implemented and HTTP-tested
-// Idempotency and optimistic-locking tests	Implemented and tested
-// Full Maven verification	Passed: 25 tests
-// Production secrets and deployment	Still need deployment-level verification
-// Research Permit backend integration	Not yet demonstrated
-// Reuse by other applications	Possible, after integration contracts are established
-
-// The duplicate-key warning in your test output is expected in the concurrent idempotency test; the test passed. It is not, by itself, a failure.

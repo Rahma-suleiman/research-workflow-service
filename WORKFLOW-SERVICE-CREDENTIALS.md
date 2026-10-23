@@ -1,17 +1,17 @@
-# Research Workflow Service — Credentials and Configuration Reference
+# Workflow Engine — Credentials and Configuration Reference
 
 ## Project
-- Project: research-workflow-service
+- Project: workflow-engine
 - Java: 21
 - Spring Boot: 4.1.1
 - Package: com.zanzibar.workflow
 - Local service port: 8081
 - Executable JAR:
-  target/research-workflow-service-0.0.1-SNAPSHOT.jar
+  target/workflow-engine-0.0.1-SNAPSHOT.jar
 
 ## PostgreSQL
-- Main database: research_workflow_db
-- Test database: research_workflow_test_db
+- Main database: workflow_engine_db
+- Test database: workflow_engine_test_db
 - Database host: localhost
 - PostgreSQL port: 5432
 - Database username: workflow_service_user
@@ -45,10 +45,10 @@ Never commit passwords, signing secrets, tokens, or private keys to Git.
 - Run full verification: ./mvnw clean verify
 - Run tests: ./mvnw test
 - Check build artifact:
-  ls -lh target/research-workflow-service-0.0.1-SNAPSHOT.jar
+  ls -lh target/workflow-engine-0.0.1-SNAPSHOT.jar
 
 ## Operational notes
-- Keep the workflow database separate from the Research Permit database.
+- Keep the workflow database separate from the databases of the projects that call it.
 - The backend must authenticate to this service and sign actor assertions.
 - Keep production credentials out of source control.
 - Rotate any real credentials that have been exposed.

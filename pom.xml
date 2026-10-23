@@ -10,10 +10,10 @@
 		<relativePath /> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.zanzibar</groupId>
-	<artifactId>research-workflow-service</artifactId>
+	<artifactId>workflow-engine</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name />
-	<description />
+	<name>workflow-engine</name>
+	<description>Reusable, configurable workflow engine service</description>
 	<url />
 	<licenses>
 		<license />

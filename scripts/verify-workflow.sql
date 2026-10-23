@@ -1,5 +1,5 @@
--- Read-only diagnostics for the Research Workflow Service.
--- Run with: psql -d research_workflow_db -f scripts/verify-workflow.sql
+-- Read-only diagnostics for the workflow engine.
+-- Run with: psql -d workflow_engine_db -f scripts/verify-workflow.sql
 -- Change the workflow ID below when checking a different definition.
 
 \set workflow_id 'f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e'
@@ -10,6 +10,7 @@ SELECT
     workflow_key,
     name,
     scope,
+    initial_status,
     status,
     workflow_version,
     active,
@@ -39,22 +40,15 @@ FROM workflow_stage_configs
 WHERE workflow_definition_id = :'workflow_id'::uuid
 ORDER BY stage_order, id;
 
-\echo '4. Application types assigned to this workflow'
-SELECT application_type
-FROM workflow_definition_application_types
+\echo '4. Subject types assigned to this workflow'
+SELECT subject_type
+FROM workflow_definition_subject_types
 WHERE workflow_definition_id = :'workflow_id'::uuid
-ORDER BY application_type;
+ORDER BY subject_type;
 
-\echo '5. Active published workflow coverage by application type'
-WITH application_types(application_type) AS (
-    VALUES
-        ('FOREIGN_RESEARCHER'),
-        ('LOCAL_RESEARCHER'),
-        ('INSTITUTION_RESEARCH'),
-        ('INSTITUTION_COMPANY')
-)
+\echo '5. Active published workflow coverage by registered subject type'
 SELECT
-    t.application_type,
+    t.type_key AS subject_type,
     COUNT(w.id) AS matching_active_published_workflows,
     CASE COUNT(w.id)
         WHEN 0 THEN 'MISSING'
@@ -63,24 +57,25 @@ SELECT
     END AS resolution_result,
     STRING_AGG(w.workflow_key || ' v' || w.workflow_version, ', ' ORDER BY w.workflow_key)
         AS matching_workflows
-FROM application_types t
+FROM workflow_subject_types t
 LEFT JOIN workflow_definitions w
     ON w.status = 'PUBLISHED'
    AND w.active = TRUE
    AND (
-       w.scope = 'ALL_APPLICATIONS'
+       w.scope = 'ALL_TYPES'
        OR (
            w.scope = 'SELECTED_TYPES'
            AND EXISTS (
                SELECT 1
-               FROM workflow_definition_application_types at
-               WHERE at.workflow_definition_id = w.id
-                 AND at.application_type = t.application_type
+               FROM workflow_definition_subject_types st
+               WHERE st.workflow_definition_id = w.id
+                 AND st.subject_type = t.type_key
            )
        )
    )
-GROUP BY t.application_type
-ORDER BY t.application_type;
+WHERE t.active = TRUE
+GROUP BY t.type_key
+ORDER BY t.type_key;
 
 \echo '6. Duplicate stage order check (should return no rows)'
 SELECT stage_order, COUNT(*) AS duplicate_count

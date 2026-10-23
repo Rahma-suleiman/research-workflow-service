@@ -2,6 +2,6 @@
 package com.zanzibar.workflow.enums;
 
 public enum WorkflowScope {
-    ALL_APPLICATIONS,
+    ALL_TYPES,
     SELECTED_TYPES
 }

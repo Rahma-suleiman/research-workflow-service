@@ -4,7 +4,6 @@ import com.zanzibar.workflow.dto.response.WorkflowCoverageResponse;
 import com.zanzibar.workflow.dto.response.WorkflowValidationResponse;
 import com.zanzibar.workflow.enums.TriggerType;
 import com.zanzibar.workflow.enums.WorkflowScope;
-import com.zanzibar.workflow.enums.WorkflowApplicationTypes;
 import com.zanzibar.workflow.enums.WorkflowStatus;
 import com.zanzibar.workflow.exception.WorkflowException;
 import com.zanzibar.workflow.model.WorkflowDefinition;
@@ -34,13 +33,6 @@ import java.util.stream.Collectors;
 @Service
 public class WorkflowValidationService {
 
-    private static final Set<String> ALLOWED_ROLES = Set.of(
-        "APPLICANT", "ADMIN", "ADMINISTRATOR", "MANAGER",
-        "RESEARCH_OFFICER", "SVPO_OFFICER", "OCGS_VERIFICATION",
-        "ETHICS_OFFICER", "FINANCE_OFFICER", "OFFICER",
-        "COMPLIANCE_OFFICER", "INSTITUTION", "SYSTEM"
-    );
-
     private static final Pattern STATUS_PATTERN =
         Pattern.compile("[A-Z][A-Z0-9_]*");
     private static final Pattern ACTION_PATTERN =
@@ -48,13 +40,16 @@ public class WorkflowValidationService {
 
     private final WorkflowDefinitionRepository definitionRepository;
     private final WorkflowStageConfigRepository stageRepository;
+    private final WorkflowRegistryService registryService;
 
     public WorkflowValidationService(
         WorkflowDefinitionRepository definitionRepository,
-        WorkflowStageConfigRepository stageRepository
+        WorkflowStageConfigRepository stageRepository,
+        WorkflowRegistryService registryService
     ) {
         this.definitionRepository = definitionRepository;
         this.stageRepository = stageRepository;
+        this.registryService = registryService;
     }
 
     @Transactional(readOnly = true)
@@ -73,23 +68,29 @@ public class WorkflowValidationService {
 
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
-        Set<String> applicationTypes = normalizedTypes(
-            workflow.getApplicableApplicationTypes());
+        Set<String> subjectTypes = normalizedTypes(workflow.getSubjectTypes());
+        Set<String> registeredTypes = registryService.activeSubjectTypeKeys();
+        Set<String> registeredRoles = registryService.activeRoleKeys();
+        String initialStatus = normalize(workflow.getInitialStatus());
 
         if (workflow.getScope() == null) {
             errors.add("Workflow scope is missing.");
         } else if (workflow.getScope() == WorkflowScope.SELECTED_TYPES) {
-            if (applicationTypes.isEmpty()) {
-                errors.add("SELECTED_TYPES requires at least one application type.");
+            if (subjectTypes.isEmpty()) {
+                errors.add("SELECTED_TYPES requires at least one subject type.");
             }
-            for (String type : applicationTypes) {
-                if (!WorkflowApplicationTypes.SUPPORTED.contains(type)) {
-                    errors.add("Unsupported application type: " + type);
+            for (String type : subjectTypes) {
+                if (!registeredTypes.contains(type)) {
+                    errors.add("Unknown or inactive subject type: " + type);
                 }
             }
-        } else if (workflow.getScope() == WorkflowScope.ALL_APPLICATIONS
-                && !applicationTypes.isEmpty()) {
-            errors.add("ALL_APPLICATIONS must not list selected application types.");
+        } else if (workflow.getScope() == WorkflowScope.ALL_TYPES
+                && !subjectTypes.isEmpty()) {
+            errors.add("ALL_TYPES must not list selected subject types.");
+        }
+
+        if (!STATUS_PATTERN.matcher(initialStatus).matches()) {
+            errors.add("Workflow initial status is missing or invalid.");
         }
 
         if (workflow.getStatus() == WorkflowStatus.DRAFT && workflow.isActive()) {
@@ -144,9 +145,9 @@ public class WorkflowValidationService {
                 errors.add("Stage '" + stage.getName() + "' has no assigned role.");
             } else {
                 for (String assignedRole : role.split(",")) {
-                    if (!ALLOWED_ROLES.contains(assignedRole.trim())) {
+                    if (!registeredRoles.contains(assignedRole.trim())) {
                         errors.add("Stage '" + stage.getName()
-                            + "' has unsupported role '" + assignedRole.trim() + "'.");
+                            + "' has unknown or inactive role '" + assignedRole.trim() + "'.");
                     }
                 }
             }
@@ -155,13 +156,13 @@ public class WorkflowValidationService {
                 errors.add("Stage '" + stage.getName() + "' has no triggerType.");
             }
             if ((stage.getTriggerType() == TriggerType.SYSTEM
-                    || stage.getTriggerType() == TriggerType.PAYMENT)
-                    && !"SYSTEM".equals(role)) {
-                errors.add("SYSTEM/PAYMENT stage '" + stage.getName()
+                    || stage.getTriggerType() == TriggerType.EXTERNAL_EVENT)
+                    && !WorkflowRegistryService.SYSTEM_ROLE.equals(role)) {
+                errors.add("SYSTEM/EXTERNAL_EVENT stage '" + stage.getName()
                     + "' must be assigned to SYSTEM.");
             }
             if (stage.getTriggerType() == TriggerType.HUMAN
-                    && List.of(role.split(",")).contains("SYSTEM")) {
+                    && List.of(role.split(",")).contains(WorkflowRegistryService.SYSTEM_ROLE)) {
                 errors.add("HUMAN stage '" + stage.getName()
                     + "' cannot be assigned to SYSTEM.");
             }
@@ -179,10 +180,11 @@ public class WorkflowValidationService {
         if (enabledStages.isEmpty()) {
             errors.add("The workflow has no enabled transitions.");
         } else {
-            Set<String> reachable = reachableStatuses(enabledStages);
+            Set<String> reachable = reachableStatuses(enabledStages, initialStatus);
             if (enabledStages.stream().noneMatch(
-                    stage -> "DRAFT".equals(normalize(stage.getFromStatus())))) {
-                errors.add("No enabled transition starts from DRAFT.");
+                    stage -> initialStatus.equals(normalize(stage.getFromStatus())))) {
+                errors.add("No enabled transition starts from the initial status "
+                    + initialStatus + ".");
             }
 
             List<String> unreachable = enabledStages.stream()
@@ -192,7 +194,7 @@ public class WorkflowValidationService {
                 .toList();
 
             if (!unreachable.isEmpty()) {
-                errors.add("Enabled transitions are unreachable from DRAFT: "
+                errors.add("Enabled transitions are unreachable from " + initialStatus + ": "
                     + String.join(", ", unreachable) + ".");
             }
 
@@ -211,11 +213,6 @@ public class WorkflowValidationService {
             }
         }
 
-        if (workflow.getScope() == WorkflowScope.SELECTED_TYPES
-                && applicationTypes.isEmpty()) {
-            // The specific error is already present above; no extra action needed.
-        }
-
         return new WorkflowValidationResponse(
             workflow.getId(),
             workflow.getWorkflowKey(),
@@ -230,32 +227,32 @@ public class WorkflowValidationService {
     }
 
     @Transactional(readOnly = true)
-    public WorkflowCoverageResponse inspectApplicationTypeCoverage() {
+    public WorkflowCoverageResponse inspectSubjectTypeCoverage() {
         List<WorkflowDefinition> activePublished =
             definitionRepository.findByStatusAndActiveTrue(WorkflowStatus.PUBLISHED);
 
-        List<WorkflowCoverageResponse.ApplicationTypeCoverage> results =
+        List<WorkflowCoverageResponse.SubjectTypeCoverage> results =
             new ArrayList<>();
 
-        for (String type : WorkflowApplicationTypes.SUPPORTED.stream().sorted().toList()) {
+        for (String type : registryService.activeSubjectTypeKeys().stream().sorted().toList()) {
             List<WorkflowDefinition> matches = activePublished.stream()
                 .filter(workflow -> matchesType(workflow, type))
                 .toList();
 
             if (matches.isEmpty()) {
-                results.add(new WorkflowCoverageResponse.ApplicationTypeCoverage(
+                results.add(new WorkflowCoverageResponse.SubjectTypeCoverage(
                     type, "MISSING", 0, null, null, null,
-                    "No active published workflow covers this application type."));
+                    "No active published workflow covers this subject type."));
             } else if (matches.size() > 1) {
-                results.add(new WorkflowCoverageResponse.ApplicationTypeCoverage(
+                results.add(new WorkflowCoverageResponse.SubjectTypeCoverage(
                     type, "AMBIGUOUS", matches.size(), null, null, null,
-                    "Multiple active published workflows cover this application type."));
+                    "Multiple active published workflows cover this subject type."));
             } else {
                 WorkflowDefinition match = matches.get(0);
-                results.add(new WorkflowCoverageResponse.ApplicationTypeCoverage(
+                results.add(new WorkflowCoverageResponse.SubjectTypeCoverage(
                     type, "RESOLVED", 1, match.getId(), match.getWorkflowKey(),
                     match.getWorkflowVersion(),
-                    "Exactly one active published workflow covers this application type."));
+                    "Exactly one active published workflow covers this subject type."));
             }
         }
 
@@ -265,14 +262,17 @@ public class WorkflowValidationService {
     }
 
     private boolean matchesType(WorkflowDefinition workflow, String type) {
-        if (workflow.getScope() == WorkflowScope.ALL_APPLICATIONS) {
+        if (workflow.getScope() == WorkflowScope.ALL_TYPES) {
             return true;
         }
         return workflow.getScope() == WorkflowScope.SELECTED_TYPES
-            && normalizedTypes(workflow.getApplicableApplicationTypes()).contains(type);
+            && normalizedTypes(workflow.getSubjectTypes()).contains(type);
     }
 
-    private Set<String> reachableStatuses(List<WorkflowStageConfig> stages) {
+    private Set<String> reachableStatuses(
+        List<WorkflowStageConfig> stages,
+        String initialStatus
+    ) {
         Map<String, List<String>> graph = stages.stream().collect(
             Collectors.groupingBy(
                 stage -> normalize(stage.getFromStatus()),
@@ -283,8 +283,8 @@ public class WorkflowValidationService {
 
         Set<String> visited = new HashSet<>();
         ArrayDeque<String> queue = new ArrayDeque<>();
-        queue.add("DRAFT");
-        visited.add("DRAFT");
+        queue.add(initialStatus);
+        visited.add(initialStatus);
 
         while (!queue.isEmpty()) {
             String current = queue.removeFirst();

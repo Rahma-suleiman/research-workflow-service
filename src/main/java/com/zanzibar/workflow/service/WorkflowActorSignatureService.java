@@ -16,7 +16,7 @@ import java.util.Locale;
 
 /**
  * Verifies that actor identity, role, trigger, and transition details were
- * signed by the trusted Research Permit backend. HTTP Basic alone only proves
+ * signed by the trusted calling backend. HTTP Basic alone only proves
  * which service account called this API; it does not prove the end-user role.
  */
 @Service
@@ -90,7 +90,7 @@ public class WorkflowActorSignatureService {
         List<String> values = List.of(
             safe(request.workflowDefinitionId()),
             safe(request.workflowVersion()),
-            safe(request.applicationId()),
+            safe(request.subjectId()),
             normalize(request.currentStatus()),
             normalize(request.actionKey()),
             safe(request.triggerType()),

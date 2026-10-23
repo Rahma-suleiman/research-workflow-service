@@ -1,0 +1,31 @@
+
+package com.zanzibar.workflow.dto.request;
+
+import com.zanzibar.workflow.enums.WorkflowScope;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+
+import java.util.Set;
+
+/** Edits a DRAFT workflow's settings. The workflow key and version never change. */
+public record UpdateWorkflowRequest(
+
+    @NotBlank
+    @Size(max = 200)
+    String name,
+
+    String description,
+
+    @NotBlank
+    @Size(max = 80)
+    @Pattern(regexp = "[A-Za-z][A-Za-z0-9_]*")
+    String initialStatus,
+
+    @NotNull
+    WorkflowScope scope,
+
+    Set<@NotBlank @Size(max = 60) String> subjectTypes
+
+) {}

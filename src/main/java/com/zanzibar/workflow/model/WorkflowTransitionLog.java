@@ -13,8 +13,8 @@ import java.util.UUID;
     name = "workflow_transition_logs",
     indexes = {
         @Index(
-            name = "idx_transition_log_application",
-            columnList = "application_id, executed_at"
+            name = "idx_transition_log_subject",
+            columnList = "subject_id, executed_at"
         ),
         @Index(
             name = "idx_transition_log_workflow",
@@ -39,8 +39,8 @@ public class WorkflowTransitionLog {
     @Column(name = "workflow_version", nullable = false)
     private Integer workflowVersion;
 
-    @Column(name = "application_id", nullable = false)
-    private UUID applicationId;
+    @Column(name = "subject_id", nullable = false, length = 150)
+    private String subjectId;
 
     @Column(name = "from_status", nullable = false, length = 80)
     private String fromStatus;
@@ -97,12 +97,12 @@ public class WorkflowTransitionLog {
         this.workflowVersion = workflowVersion;
     }
 
-    public UUID getApplicationId() {
-        return applicationId;
+    public String getSubjectId() {
+        return subjectId;
     }
 
-    public void setApplicationId(UUID applicationId) {
-        this.applicationId = applicationId;
+    public void setSubjectId(String subjectId) {
+        this.subjectId = subjectId;
     }
 
     public String getFromStatus() {

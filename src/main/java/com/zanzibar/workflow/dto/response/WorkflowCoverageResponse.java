@@ -3,13 +3,13 @@ package com.zanzibar.workflow.dto.response;
 import java.util.List;
 import java.util.UUID;
 
-/** Resolution coverage for each supported Research Permit application type. */
+/** Resolution coverage for each active registered subject type. */
 public record WorkflowCoverageResponse(
-    boolean allApplicationTypesCovered,
-    List<ApplicationTypeCoverage> applicationTypes
+    boolean allSubjectTypesCovered,
+    List<SubjectTypeCoverage> subjectTypes
 ) {
-    public record ApplicationTypeCoverage(
-        String applicationType,
+    public record SubjectTypeCoverage(
+        String subjectType,
         String result,
         int matchingWorkflowCount,
         UUID workflowDefinitionId,

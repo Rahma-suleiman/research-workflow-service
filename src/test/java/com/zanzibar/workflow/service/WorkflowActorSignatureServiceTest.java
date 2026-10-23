@@ -44,13 +44,13 @@ class WorkflowActorSignatureServiceTest {
     void rejectsSignatureWhenCommentsChange() {
         ExecuteTransitionRequest signed = new ExecuteTransitionRequest(
             UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e"), 2,
-            UUID.fromString("7f4e6ed8-0ed9-4b20-a2d0-222b40ad6c01"),
+            "7f4e6ed8-0ed9-4b20-a2d0-222b40ad6c01",
             "UNDER_REVIEW", "REQUEST_INFORMATION", TriggerType.HUMAN,
             "research-officer-1", "RESEARCH_OFFICER", "Please upload the missing document", "key-1"
         );
         String signature = service.signRequest(signed);
         ExecuteTransitionRequest changed = new ExecuteTransitionRequest(
-            signed.workflowDefinitionId(), signed.workflowVersion(), signed.applicationId(),
+            signed.workflowDefinitionId(), signed.workflowVersion(), signed.subjectId(),
             signed.currentStatus(), signed.actionKey(), signed.triggerType(), signed.actorId(),
             signed.actorRole(), "Different comments", signed.idempotencyKey()
         );
@@ -72,7 +72,7 @@ class WorkflowActorSignatureServiceTest {
     private ExecuteTransitionRequest request(String role, String key) {
         return new ExecuteTransitionRequest(
             UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e"), 2,
-            UUID.fromString("7f4e6ed8-0ed9-4b20-a2d0-222b40ad6c01"),
+            "7f4e6ed8-0ed9-4b20-a2d0-222b40ad6c01",
             "DRAFT", "SUBMIT", TriggerType.HUMAN, "applicant-123", role,
             "", key
         );

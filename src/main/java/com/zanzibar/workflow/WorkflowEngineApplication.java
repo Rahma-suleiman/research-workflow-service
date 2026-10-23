@@ -4,10 +4,10 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class ResearchWorkflowServiceApplication {
+public class WorkflowEngineApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(ResearchWorkflowServiceApplication.class, args);
+		SpringApplication.run(WorkflowEngineApplication.class, args);
 	}
 
 }

@@ -1,5 +1,7 @@
 package com.zanzibar.workflow.service;
 
+import com.zanzibar.workflow.dto.request.CreateWorkflowRequest;
+import com.zanzibar.workflow.dto.request.CreateWorkflowStageRequest;
 import com.zanzibar.workflow.enums.TriggerType;
 import com.zanzibar.workflow.enums.WorkflowScope;
 import com.zanzibar.workflow.enums.WorkflowStatus;
@@ -23,8 +25,12 @@ class WorkflowManagementServiceTest {
 
     private final WorkflowDefinitionRepository definitions = mock(WorkflowDefinitionRepository.class);
     private final WorkflowStageConfigRepository stages = mock(WorkflowStageConfigRepository.class);
-    private final WorkflowValidationService validation = new WorkflowValidationService(definitions, stages);
-    private final WorkflowManagementService service = new WorkflowManagementService(definitions, stages, validation);
+    private final WorkflowRegistryService registry = TestRegistries.registry(
+        List.of("APPLICANT", "REVIEWER"), List.of("TYPE_A", "TYPE_B"));
+    private final WorkflowValidationService validation =
+        new WorkflowValidationService(definitions, stages, registry);
+    private final WorkflowManagementService service =
+        new WorkflowManagementService(definitions, stages, validation, registry);
 
     private final UUID draftId = UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e");
 
@@ -48,7 +54,7 @@ class WorkflowManagementServiceTest {
 
     @Test
     void publishingRejectsEnabledTransitionThatCannotBeReachedFromDraft() {
-        WorkflowDefinition draft = workflow(draftId, "research-permit-standard", WorkflowStatus.DRAFT);
+        WorkflowDefinition draft = workflow(draftId, "standard-flow", WorkflowStatus.DRAFT);
         when(definitions.findById(draftId)).thenReturn(Optional.of(draft));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(draftId))
             .thenReturn(List.of(stage("ORPHAN_STATUS", "SOMEWHERE", "ORPHAN_ACTION", 1)));
@@ -59,15 +65,37 @@ class WorkflowManagementServiceTest {
         verify(definitions, never()).save(any());
     }
 
+    @Test
+    void creatingWorkflowForUnregisteredSubjectTypeIsRejected() {
+        WorkflowException error = assertThrows(WorkflowException.class,
+            () -> service.createWorkflow(new CreateWorkflowRequest(
+                "orders", "Orders", null, "NEW",
+                WorkflowScope.SELECTED_TYPES, Set.of("UNKNOWN_TYPE"))));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatus());
+        verify(definitions, never()).save(any());
+    }
+
+    @Test
+    void addingStageWithUnregisteredRoleIsRejected() {
+        WorkflowDefinition draft = workflow(draftId, "standard-flow", WorkflowStatus.DRAFT);
+        when(definitions.findById(draftId)).thenReturn(Optional.of(draft));
+
+        WorkflowException error = assertThrows(WorkflowException.class,
+            () -> service.addStage(draftId, new CreateWorkflowStageRequest(
+                "Approve", null, "NEW", "APPROVED", "APPROVE", "AUDITOR",
+                TriggerType.HUMAN, 1, null, false, false, null, true)));
+        assertTrue(error.getMessage().contains("AUDITOR"));
+        verify(definitions, never()).save(any());
+    }
+
     private WorkflowDefinition workflow(UUID id, String key, WorkflowStatus status) {
         WorkflowDefinition workflow = mock(WorkflowDefinition.class);
         when(workflow.getId()).thenReturn(id);
         when(workflow.getWorkflowKey()).thenReturn(key);
         when(workflow.getStatus()).thenReturn(status);
         when(workflow.getScope()).thenReturn(WorkflowScope.SELECTED_TYPES);
-        when(workflow.getApplicableApplicationTypes()).thenReturn(Set.of(
-            "FOREIGN_RESEARCHER", "LOCAL_RESEARCHER",
-            "INSTITUTION_RESEARCH", "INSTITUTION_COMPANY"));
+        when(workflow.getSubjectTypes()).thenReturn(Set.of("TYPE_A", "TYPE_B"));
+        when(workflow.getInitialStatus()).thenReturn("DRAFT");
         when(workflow.getWorkflowVersion()).thenReturn(2);
         when(workflow.getStages()).thenReturn(List.of());
         return workflow;

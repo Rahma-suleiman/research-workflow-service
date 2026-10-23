@@ -17,8 +17,10 @@ public record ExecuteTransitionRequest(
     @NotNull
     Integer workflowVersion,
 
-    @NotNull
-    UUID applicationId,
+    @NotBlank
+    @Size(max = 150)
+    @Pattern(regexp = "[A-Za-z0-9][A-Za-z0-9._:-]*")
+    String subjectId,
 
     @NotBlank
     @Size(max = 80)

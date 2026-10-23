@@ -3,20 +3,20 @@ package com.zanzibar.workflow.service;
 
 import com.zanzibar.workflow.dto.request.CreateWorkflowRequest;
 import com.zanzibar.workflow.dto.request.CreateWorkflowStageRequest;
+import com.zanzibar.workflow.dto.request.UpdateWorkflowRequest;
 import com.zanzibar.workflow.dto.response.WorkflowResponse;
 import com.zanzibar.workflow.dto.response.WorkflowStageResponse;
 import com.zanzibar.workflow.model.WorkflowDefinition;
 import com.zanzibar.workflow.model.WorkflowStageConfig;
 import com.zanzibar.workflow.enums.TriggerType;
 import com.zanzibar.workflow.enums.WorkflowScope;
-import com.zanzibar.workflow.enums.WorkflowApplicationTypes;
 import com.zanzibar.workflow.enums.WorkflowStatus;
 import com.zanzibar.workflow.exception.WorkflowException;
 import com.zanzibar.workflow.repository.WorkflowDefinitionRepository;
 import com.zanzibar.workflow.repository.WorkflowStageConfigRepository;
-import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -30,41 +30,28 @@ import java.util.regex.Pattern;
 @Transactional
 public class WorkflowManagementService {
 
-    private static final Set<String> ALLOWED_ROLES = Set.of(
-        "APPLICANT",
-        "ADMIN",
-        "ADMINISTRATOR",
-        "MANAGER",
-        "RESEARCH_OFFICER",
-        "SVPO_OFFICER",
-        "OCGS_VERIFICATION",
-        "ETHICS_OFFICER",
-        "FINANCE_OFFICER",
-        "OFFICER",
-        "COMPLIANCE_OFFICER",
-        "INSTITUTION",
-        "SYSTEM"
-    );
-
     private static final Pattern ACTION_KEY_PATTERN =
         Pattern.compile("[A-Za-z][A-Za-z0-9_]*");
 
     private final WorkflowDefinitionRepository definitionRepository;
     private final WorkflowStageConfigRepository stageRepository;
     private final WorkflowValidationService validationService;
+    private final WorkflowRegistryService registryService;
 
     public WorkflowManagementService(
         WorkflowDefinitionRepository definitionRepository,
         WorkflowStageConfigRepository stageRepository,
-        WorkflowValidationService validationService
+        WorkflowValidationService validationService,
+        WorkflowRegistryService registryService
     ) {
         this.definitionRepository = definitionRepository;
         this.stageRepository = stageRepository;
         this.validationService = validationService;
+        this.registryService = registryService;
     }
 
     public WorkflowResponse createWorkflow(CreateWorkflowRequest request) {
-        validateScope(request.scope(), request.applicableApplicationTypes());
+        validateScope(request.scope(), request.subjectTypes());
 
         String key = request.workflowKey().trim();
 
@@ -79,13 +66,29 @@ public class WorkflowManagementService {
         workflow.setWorkflowKey(key);
         workflow.setName(request.name().trim());
         workflow.setDescription(request.description());
+        workflow.setInitialStatus(normalizeStatus(request.initialStatus()));
         workflow.setScope(request.scope());
         workflow.setStatus(WorkflowStatus.DRAFT);
         workflow.setWorkflowVersion(nextVersion);
         workflow.setActive(false);
-        workflow.setApplicableApplicationTypes(
-            normalizeApplicationTypes(request.applicableApplicationTypes())
-        );
+        workflow.setSubjectTypes(normalizeSubjectTypes(request.subjectTypes()));
+
+        return toResponse(definitionRepository.save(workflow));
+    }
+
+    public WorkflowResponse updateWorkflow(
+        UUID workflowId,
+        UpdateWorkflowRequest request
+    ) {
+        WorkflowDefinition workflow = getDefinition(workflowId);
+        ensureDraft(workflow);
+        validateScope(request.scope(), request.subjectTypes());
+
+        workflow.setName(request.name().trim());
+        workflow.setDescription(request.description());
+        workflow.setInitialStatus(normalizeStatus(request.initialStatus()));
+        workflow.setScope(request.scope());
+        workflow.setSubjectTypes(normalizeSubjectTypes(request.subjectTypes()));
 
         return toResponse(definitionRepository.save(workflow));
     }
@@ -111,13 +114,12 @@ public class WorkflowManagementService {
         draft.setWorkflowKey(source.getWorkflowKey());
         draft.setName(source.getName());
         draft.setDescription(source.getDescription());
+        draft.setInitialStatus(source.getInitialStatus());
         draft.setScope(source.getScope());
         draft.setStatus(WorkflowStatus.DRAFT);
         draft.setWorkflowVersion(nextVersion);
         draft.setActive(false);
-        draft.setApplicableApplicationTypes(
-            source.getApplicableApplicationTypes()
-        );
+        draft.setSubjectTypes(source.getSubjectTypes());
 
         for (WorkflowStageConfig oldStage : source.getStages()) {
             WorkflowStageConfig copy = new WorkflowStageConfig();
@@ -191,7 +193,7 @@ public class WorkflowManagementService {
         validateBeforePublish(workflow);
 
         // Never silently archive a different workflow key: that can remove
-        // coverage for application types not included in the new workflow.
+        // coverage for subject types not included in the new workflow.
         // A new version may replace only the active version of the same key
         // and only when its scope is unchanged.
         List<WorkflowDefinition> activeWorkflows =
@@ -210,7 +212,7 @@ public class WorkflowManagementService {
             }
             if (!sameScope(existing, workflow)) {
                 throw new WorkflowException(HttpStatus.CONFLICT,
-                    "A new version must keep the same scope and application types as the active version.");
+                    "A new version must keep the same scope and subject types as the active version.");
             }
             versionsToArchive.add(existing);
         }
@@ -257,37 +259,39 @@ public class WorkflowManagementService {
 
     private void validateScope(
         WorkflowScope scope,
-        Set<String> applicationTypes
+        Set<String> subjectTypes
     ) {
         if (scope == null) {
             throw new WorkflowException("Workflow scope is required.");
         }
 
         if (scope == WorkflowScope.SELECTED_TYPES
-                && (applicationTypes == null || applicationTypes.isEmpty())) {
+                && (subjectTypes == null || subjectTypes.isEmpty())) {
             throw new WorkflowException(
-                "SELECTED_TYPES requires at least one application type."
+                "SELECTED_TYPES requires at least one subject type."
             );
         }
-        if (scope == WorkflowScope.ALL_APPLICATIONS
-                && applicationTypes != null && !applicationTypes.isEmpty()) {
+        if (scope == WorkflowScope.ALL_TYPES
+                && subjectTypes != null && !subjectTypes.isEmpty()) {
             throw new WorkflowException(
-                "ALL_APPLICATIONS workflows must not list selected application types."
+                "ALL_TYPES workflows must not list selected subject types."
             );
         }
-        if (applicationTypes != null) {
-            for (String type : applicationTypes) {
-                if (type == null || !WorkflowApplicationTypes.SUPPORTED.contains(
+        if (subjectTypes != null) {
+            Set<String> registered = registryService.activeSubjectTypeKeys();
+            for (String type : subjectTypes) {
+                if (type == null || !registered.contains(
                         type.trim().toUpperCase(Locale.ROOT))) {
                     throw new WorkflowException(
-                        "Unsupported application type: " + type
+                        "Unknown or inactive subject type: " + type
+                            + ". Register it under /api/subject-types first."
                     );
                 }
             }
         }
     }
 
-    private Set<String> normalizeApplicationTypes(Set<String> types) {
+    private Set<String> normalizeSubjectTypes(Set<String> types) {
         if (types == null) {
             return new LinkedHashSet<>();
         }
@@ -296,7 +300,7 @@ public class WorkflowManagementService {
         for (String type : types) {
             if (type == null || type.isBlank()) {
                 throw new WorkflowException(
-                    "Application types cannot be blank."
+                    "Subject types cannot be blank."
                 );
             }
             normalized.add(type.trim().toUpperCase(Locale.ROOT));
@@ -314,24 +318,26 @@ public class WorkflowManagementService {
 
         String role = normalizeRole(stage.assignedRole());
 
+        Set<String> registeredRoles = registryService.activeRoleKeys();
         for (String assigned : role.split(",")) {
-            if (!ALLOWED_ROLES.contains(assigned.trim())) {
+            if (!registeredRoles.contains(assigned.trim())) {
                 throw new WorkflowException(
-                    "Unsupported assigned role: " + assigned
+                    "Unknown or inactive assigned role: " + assigned
+                        + ". Register it under /api/roles first."
                 );
             }
         }
 
         if ((stage.triggerType() == TriggerType.SYSTEM
-                || stage.triggerType() == TriggerType.PAYMENT)
-                && !role.equals("SYSTEM")) {
+                || stage.triggerType() == TriggerType.EXTERNAL_EVENT)
+                && !role.equals(WorkflowRegistryService.SYSTEM_ROLE)) {
             throw new WorkflowException(
-                "SYSTEM and PAYMENT transitions must be assigned to SYSTEM."
+                "SYSTEM and EXTERNAL_EVENT transitions must be assigned to SYSTEM."
             );
         }
 
         if (stage.triggerType() == TriggerType.HUMAN
-                && List.of(role.split(",")).contains("SYSTEM")) {
+                && List.of(role.split(",")).contains(WorkflowRegistryService.SYSTEM_ROLE)) {
             throw new WorkflowException(
                 "HUMAN transitions must be assigned only to human roles; SYSTEM cannot be included."
             );
@@ -366,23 +372,27 @@ public class WorkflowManagementService {
 
     private boolean sameScope(WorkflowDefinition first, WorkflowDefinition second) {
         if (first.getScope() != second.getScope()) return false;
-        if (first.getScope() == WorkflowScope.ALL_APPLICATIONS) return true;
-        return normalizeApplicationTypes(first.getApplicableApplicationTypes())
-            .equals(normalizeApplicationTypes(second.getApplicableApplicationTypes()));
+        if (first.getScope() == WorkflowScope.ALL_TYPES) return true;
+        return normalizeSubjectTypes(first.getSubjectTypes())
+            .equals(normalizeSubjectTypes(second.getSubjectTypes()));
     }
 
     private boolean scopesOverlap(
         WorkflowDefinition first,
         WorkflowDefinition second
     ) {
-        if (first.getScope() == WorkflowScope.ALL_APPLICATIONS
-                || second.getScope() == WorkflowScope.ALL_APPLICATIONS) {
+        if (first.getScope() == WorkflowScope.ALL_TYPES
+                || second.getScope() == WorkflowScope.ALL_TYPES) {
             return true;
         }
 
-        return first.getApplicableApplicationTypes()
+        return first.getSubjectTypes()
             .stream()
-            .anyMatch(second.getApplicableApplicationTypes()::contains);
+            .anyMatch(second.getSubjectTypes()::contains);
+    }
+
+    private String normalizeStatus(String status) {
+        return status.trim().toUpperCase(Locale.ROOT);
     }
 
     private String normalizeRole(String role) {
@@ -456,11 +466,12 @@ public class WorkflowManagementService {
             workflow.getWorkflowKey(),
             workflow.getName(),
             workflow.getDescription(),
+            workflow.getInitialStatus(),
             workflow.getScope(),
             workflow.getStatus(),
             workflow.getWorkflowVersion(),
             workflow.isActive(),
-            Set.copyOf(workflow.getApplicableApplicationTypes()),
+            Set.copyOf(workflow.getSubjectTypes()),
             List.copyOf(stages),
             workflow.getCreatedAt(),
             workflow.getUpdatedAt(),

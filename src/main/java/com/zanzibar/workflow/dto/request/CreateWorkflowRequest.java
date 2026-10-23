@@ -4,6 +4,7 @@ package com.zanzibar.workflow.dto.request;
 import com.zanzibar.workflow.enums.WorkflowScope;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.util.Set;
@@ -20,9 +21,14 @@ public record CreateWorkflowRequest(
 
     String description,
 
+    @NotBlank
+    @Size(max = 80)
+    @Pattern(regexp = "[A-Za-z][A-Za-z0-9_]*")
+    String initialStatus,
+
     @NotNull
     WorkflowScope scope,
 
-    Set<@NotBlank @Size(max = 60) String> applicableApplicationTypes
+    Set<@NotBlank @Size(max = 60) String> subjectTypes
 
 ) {}

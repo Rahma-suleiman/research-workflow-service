@@ -26,7 +26,9 @@ class WorkflowValidationServiceTest {
     private final WorkflowStageConfigRepository stages =
         mock(WorkflowStageConfigRepository.class);
     private final WorkflowValidationService service =
-        new WorkflowValidationService(definitions, stages);
+        new WorkflowValidationService(definitions, stages, TestRegistries.registry(
+            List.of("APPLICANT", "REVIEWER"),
+            List.of("TYPE_A", "TYPE_B", "TYPE_C")));
 
     private final UUID workflowId =
         UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e");
@@ -40,7 +42,7 @@ class WorkflowValidationServiceTest {
                 stage("DRAFT", "SUBMITTED", "SUBMIT", "APPLICANT",
                     TriggerType.HUMAN, 1),
                 stage("SUBMITTED", "PAYMENT_PENDING", "INITIATE_PAYMENT", "SYSTEM",
-                    TriggerType.PAYMENT, 2)
+                    TriggerType.EXTERNAL_EVENT, 2)
             ));
 
         WorkflowValidationResponse report = service.validateWorkflow(workflowId);
@@ -71,7 +73,7 @@ class WorkflowValidationServiceTest {
     }
 
     @Test
-    void systemRoleCannotBeCombinedWithHumanRoleForPaymentTransition() {
+    void systemRoleCannotBeCombinedWithHumanRoleForExternalEventTransition() {
         WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
         when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
@@ -79,7 +81,7 @@ class WorkflowValidationServiceTest {
                 stage("DRAFT", "SUBMITTED", "SUBMIT", "APPLICANT",
                     TriggerType.HUMAN, 1),
                 stage("SUBMITTED", "PAID", "PAY", "SYSTEM,APPLICANT",
-                    TriggerType.PAYMENT, 2)
+                    TriggerType.EXTERNAL_EVENT, 2)
             ));
 
         WorkflowValidationResponse report = service.validateWorkflow(workflowId);
@@ -92,39 +94,87 @@ class WorkflowValidationServiceTest {
     @Test
     void coverageReportsMissingAndAmbiguousTypes() {
         WorkflowDefinition first = coverageWorkflow(
-            "research-permit-standard", WorkflowScope.SELECTED_TYPES,
-            Set.of("FOREIGN_RESEARCHER", "LOCAL_RESEARCHER"));
+            "standard-flow", WorkflowScope.SELECTED_TYPES,
+            Set.of("TYPE_A", "TYPE_B"));
         WorkflowDefinition duplicate = coverageWorkflow(
-            "another-workflow", WorkflowScope.SELECTED_TYPES, Set.of("FOREIGN_RESEARCHER"));
+            "another-workflow", WorkflowScope.SELECTED_TYPES, Set.of("TYPE_A"));
 
         when(definitions.findByStatusAndActiveTrue(WorkflowStatus.PUBLISHED))
             .thenReturn(List.of(first, duplicate));
 
-        WorkflowCoverageResponse report = service.inspectApplicationTypeCoverage();
+        WorkflowCoverageResponse report = service.inspectSubjectTypeCoverage();
 
-        assertFalse(report.allApplicationTypesCovered());
-        assertEquals("AMBIGUOUS", report.applicationTypes().stream()
-            .filter(item -> item.applicationType().equals("FOREIGN_RESEARCHER"))
+        assertFalse(report.allSubjectTypesCovered());
+        assertEquals("AMBIGUOUS", report.subjectTypes().stream()
+            .filter(item -> item.subjectType().equals("TYPE_A"))
             .findFirst().orElseThrow().result());
-        assertEquals("RESOLVED", report.applicationTypes().stream()
-            .filter(item -> item.applicationType().equals("LOCAL_RESEARCHER"))
+        assertEquals("RESOLVED", report.subjectTypes().stream()
+            .filter(item -> item.subjectType().equals("TYPE_B"))
             .findFirst().orElseThrow().result());
-        assertEquals("MISSING", report.applicationTypes().stream()
-            .filter(item -> item.applicationType().equals("INSTITUTION_RESEARCH"))
+        assertEquals("MISSING", report.subjectTypes().stream()
+            .filter(item -> item.subjectType().equals("TYPE_C"))
             .findFirst().orElseThrow().result());
+    }
+
+    @Test
+    void reachabilityStartsFromTheWorkflowsOwnInitialStatus() {
+        WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
+        when(workflow.getInitialStatus()).thenReturn("NEW");
+        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
+            .thenReturn(List.of(
+                stage("NEW", "OPEN", "OPEN_TICKET", "APPLICANT", TriggerType.HUMAN, 1),
+                stage("OPEN", "CLOSED", "CLOSE", "REVIEWER", TriggerType.HUMAN, 2)
+            ));
+
+        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+
+        assertTrue(report.publishable(), report.errors().toString());
+    }
+
+    @Test
+    void graphThatDoesNotStartAtInitialStatusIsRejected() {
+        WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
+        when(workflow.getInitialStatus()).thenReturn("NEW");
+        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
+            .thenReturn(List.of(
+                stage("DRAFT", "SUBMITTED", "SUBMIT", "APPLICANT", TriggerType.HUMAN, 1)
+            ));
+
+        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+
+        assertFalse(report.publishable());
+        assertTrue(report.errors().stream().anyMatch(
+            error -> error.contains("starts from the initial status NEW")));
+    }
+
+    @Test
+    void unregisteredRolePreventsPublication() {
+        WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
+        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
+            .thenReturn(List.of(
+                stage("DRAFT", "SUBMITTED", "SUBMIT", "AUDITOR", TriggerType.HUMAN, 1)
+            ));
+
+        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+
+        assertFalse(report.publishable());
+        assertTrue(report.errors().stream().anyMatch(
+            error -> error.contains("unknown or inactive role 'AUDITOR'")));
     }
 
     private WorkflowDefinition workflow(WorkflowStatus status, boolean active) {
         WorkflowDefinition mockWorkflow = mock(WorkflowDefinition.class);
         when(mockWorkflow.getId()).thenReturn(workflowId);
-        when(mockWorkflow.getWorkflowKey()).thenReturn("research-permit-standard");
+        when(mockWorkflow.getWorkflowKey()).thenReturn("standard-flow");
         when(mockWorkflow.getWorkflowVersion()).thenReturn(2);
         when(mockWorkflow.getStatus()).thenReturn(status);
         when(mockWorkflow.isActive()).thenReturn(active);
         when(mockWorkflow.getScope()).thenReturn(WorkflowScope.SELECTED_TYPES);
-        when(mockWorkflow.getApplicableApplicationTypes()).thenReturn(Set.of(
-            "FOREIGN_RESEARCHER", "LOCAL_RESEARCHER",
-            "INSTITUTION_RESEARCH", "INSTITUTION_COMPANY"));
+        when(mockWorkflow.getSubjectTypes()).thenReturn(Set.of("TYPE_A", "TYPE_B"));
+        when(mockWorkflow.getInitialStatus()).thenReturn("DRAFT");
         return mockWorkflow;
     }
 
@@ -140,7 +190,7 @@ class WorkflowValidationServiceTest {
         when(workflow.getStatus()).thenReturn(WorkflowStatus.PUBLISHED);
         when(workflow.isActive()).thenReturn(true);
         when(workflow.getScope()).thenReturn(scope);
-        when(workflow.getApplicableApplicationTypes()).thenReturn(types);
+        when(workflow.getSubjectTypes()).thenReturn(types);
         return workflow;
     }
 

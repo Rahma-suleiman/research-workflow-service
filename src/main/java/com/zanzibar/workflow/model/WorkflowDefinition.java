@@ -60,13 +60,16 @@ public class WorkflowDefinition {
     @Column(nullable = false)
     private boolean active = false;
 
+    @Column(name = "initial_status", nullable = false, length = 80)
+    private String initialStatus;
+
     @ElementCollection
     @CollectionTable(
-        name = "workflow_definition_application_types",
+        name = "workflow_definition_subject_types",
         joinColumns = @JoinColumn(name = "workflow_definition_id")
     )
-    @Column(name = "application_type", nullable = false, length = 60)
-    private Set<String> applicableApplicationTypes = new LinkedHashSet<>();
+    @Column(name = "subject_type", nullable = false, length = 60)
+    private Set<String> subjectTypes = new LinkedHashSet<>();
 
     @OneToMany(
         mappedBy = "workflowDefinition",
@@ -167,17 +170,23 @@ public class WorkflowDefinition {
         this.active = active;
     }
 
-    public Set<String> getApplicableApplicationTypes() {
-        return applicableApplicationTypes;
+    public String getInitialStatus() {
+        return initialStatus;
     }
 
-    public void setApplicableApplicationTypes(
-        Set<String> applicableApplicationTypes
-    ) {
-        this.applicableApplicationTypes =
-            applicableApplicationTypes == null
+    public void setInitialStatus(String initialStatus) {
+        this.initialStatus = initialStatus;
+    }
+
+    public Set<String> getSubjectTypes() {
+        return subjectTypes;
+    }
+
+    public void setSubjectTypes(Set<String> subjectTypes) {
+        this.subjectTypes =
+            subjectTypes == null
                 ? new LinkedHashSet<>()
-                : new LinkedHashSet<>(applicableApplicationTypes);
+                : new LinkedHashSet<>(subjectTypes);
     }
 
     public List<WorkflowStageConfig> getStages() {

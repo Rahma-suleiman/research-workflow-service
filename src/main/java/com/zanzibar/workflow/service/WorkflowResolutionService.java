@@ -4,7 +4,6 @@ package com.zanzibar.workflow.service;
 import com.zanzibar.workflow.dto.response.WorkflowResponse;
 import com.zanzibar.workflow.model.WorkflowDefinition;
 import com.zanzibar.workflow.enums.WorkflowScope;
-import com.zanzibar.workflow.enums.WorkflowApplicationTypes;
 import com.zanzibar.workflow.enums.WorkflowStatus;
 import com.zanzibar.workflow.exception.WorkflowException;
 import com.zanzibar.workflow.repository.WorkflowDefinitionRepository;
@@ -22,44 +21,47 @@ public class WorkflowResolutionService {
 
     private final WorkflowDefinitionRepository definitionRepository;
     private final WorkflowManagementService managementService;
+    private final WorkflowRegistryService registryService;
 
     public WorkflowResolutionService(
         WorkflowDefinitionRepository definitionRepository,
-        WorkflowManagementService managementService
+        WorkflowManagementService managementService,
+        WorkflowRegistryService registryService
     ) {
         this.definitionRepository = definitionRepository;
         this.managementService = managementService;
+        this.registryService = registryService;
     }
 
     @Transactional(readOnly = true)
-    public WorkflowResponse resolveForNewApplication(String applicationType) {
-        if (applicationType == null || applicationType.isBlank()) {
-            throw new WorkflowException("Application type is required.");
+    public WorkflowResponse resolveForNewSubject(String subjectType) {
+        if (subjectType == null || subjectType.isBlank()) {
+            throw new WorkflowException("Subject type is required.");
         }
 
-        String normalizedType = applicationType.trim().toUpperCase(Locale.ROOT);
-        if (!WorkflowApplicationTypes.SUPPORTED.contains(normalizedType)) {
+        String normalizedType = subjectType.trim().toUpperCase(Locale.ROOT);
+        if (!registryService.activeSubjectTypeKeys().contains(normalizedType)) {
             throw new WorkflowException(HttpStatus.BAD_REQUEST,
-                "Unsupported application type: " + applicationType);
+                "Unknown or inactive subject type: " + subjectType);
         }
 
         List<WorkflowDefinition> matches =
-            definitionRepository.findActivePublishedForApplicationType(
+            definitionRepository.findActivePublishedForSubjectType(
                 WorkflowStatus.PUBLISHED,
-                WorkflowScope.ALL_APPLICATIONS,
+                WorkflowScope.ALL_TYPES,
                 WorkflowScope.SELECTED_TYPES,
                 normalizedType
             );
 
         if (matches.isEmpty()) {
             throw new WorkflowException(HttpStatus.NOT_FOUND,
-                "No active published workflow is configured for application type: "
+                "No active published workflow is configured for subject type: "
                 + normalizedType);
         }
 
         if (matches.size() > 1) {
             throw new WorkflowException(HttpStatus.CONFLICT,
-                "More than one active workflow matches application type: "
+                "More than one active workflow matches subject type: "
                 + normalizedType + ". Resolve the conflicting workflow configurations.");
         }
 
@@ -88,14 +90,14 @@ public class WorkflowResolutionService {
 
         if (workflow.getStatus() == WorkflowStatus.DRAFT) {
             throw new WorkflowException(HttpStatus.CONFLICT,
-                "A draft workflow cannot be used by an application.");
+                "A draft workflow cannot be used by a subject.");
         }
         if (workflow.getStatus() == WorkflowStatus.PUBLISHED && !workflow.isActive()) {
             throw new WorkflowException(HttpStatus.CONFLICT,
                 "The pinned workflow is marked PUBLISHED but is inactive. Repair its lifecycle state.");
         }
 
-        // Archived workflows remain retrievable for applications that
+        // Archived workflows remain retrievable for subjects that
         // were already pinned to that version.
         return managementService.getWorkflow(workflowDefinitionId);
     }

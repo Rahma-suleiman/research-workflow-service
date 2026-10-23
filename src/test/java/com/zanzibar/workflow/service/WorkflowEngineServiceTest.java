@@ -30,7 +30,7 @@ class WorkflowEngineServiceTest {
     private final WorkflowEngineService engine = new WorkflowEngineService(definitions, stages, logs);
 
     private final UUID workflowId = UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e");
-    private final UUID applicationId = UUID.fromString("7f4e6ed8-0ed9-4b20-a2d0-222b40ad6c01");
+    private final String subjectId = "ORDER-2026-00042";
 
     @BeforeEach
     void setUp() {
@@ -87,7 +87,7 @@ class WorkflowEngineServiceTest {
         WorkflowTransitionLog previous = new WorkflowTransitionLog();
         previous.setWorkflowDefinitionId(workflowId);
         previous.setWorkflowVersion(2);
-        previous.setApplicationId(applicationId);
+        previous.setSubjectId(subjectId);
         previous.setFromStatus("DRAFT");
         previous.setToStatus("SUBMITTED");
         previous.setActionKey("SUBMIT");
@@ -107,7 +107,7 @@ class WorkflowEngineServiceTest {
         WorkflowTransitionLog previous = new WorkflowTransitionLog();
         previous.setWorkflowDefinitionId(workflowId);
         previous.setWorkflowVersion(2);
-        previous.setApplicationId(applicationId);
+        previous.setSubjectId(subjectId);
         previous.setFromStatus("DRAFT");
         previous.setToStatus("SUBMITTED");
         previous.setActionKey("SUBMIT");
@@ -127,7 +127,7 @@ class WorkflowEngineServiceTest {
         WorkflowTransitionLog previous = new WorkflowTransitionLog();
         previous.setWorkflowDefinitionId(workflowId);
         previous.setWorkflowVersion(2);
-        previous.setApplicationId(applicationId);
+        previous.setSubjectId(subjectId);
         previous.setFromStatus("DRAFT");
         previous.setToStatus("SUBMITTED");
         previous.setActionKey("SUBMIT");
@@ -139,13 +139,13 @@ class WorkflowEngineServiceTest {
 
         WorkflowException error = assertThrows(WorkflowException.class, () ->
             engine.validateTransition(new ExecuteTransitionRequest(
-                workflowId, 2, applicationId, "DRAFT", "SUBMIT", TriggerType.SYSTEM,
+                workflowId, 2, subjectId, "DRAFT", "SUBMIT", TriggerType.SYSTEM,
                 "applicant-123", "APPLICANT", "", "key-1")));
         assertEquals(HttpStatus.CONFLICT, error.getStatus());
     }
 
     private ExecuteTransitionRequest request(String role, String key) {
-        return new ExecuteTransitionRequest(workflowId, 2, applicationId,
+        return new ExecuteTransitionRequest(workflowId, 2, subjectId,
             "DRAFT", "SUBMIT", TriggerType.HUMAN, "applicant-123", role, "", key);
     }
 }

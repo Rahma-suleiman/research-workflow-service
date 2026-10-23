@@ -67,7 +67,7 @@ public class WorkflowEngineService {
             throw new WorkflowException(HttpStatus.CONFLICT,
                 "The published workflow is inactive and cannot accept new transitions.");
         }
-        // Archived versions remain valid for applications pinned to that version.
+        // Archived versions remain valid for subjects pinned to that version.
 
         String fromStatus = normalize(request.currentStatus());
         String actionKey = normalize(request.actionKey());
@@ -93,7 +93,7 @@ public class WorkflowEngineService {
         WorkflowTransitionLog log = new WorkflowTransitionLog();
         log.setWorkflowDefinitionId(workflow.getId());
         log.setWorkflowVersion(workflow.getWorkflowVersion());
-        log.setApplicationId(request.applicationId());
+        log.setSubjectId(request.subjectId().trim());
         log.setFromStatus(fromStatus);
         log.setToStatus(normalize(stage.getToStatus()));
         log.setActionKey(actionKey);
@@ -105,8 +105,8 @@ public class WorkflowEngineService {
 
         try {
             WorkflowTransitionLog saved = logRepository.saveAndFlush(log);
-            return response(saved, "The configured transition is valid. The Research Permit API "
-                + "must persist the application status separately.");
+            return response(saved, "The configured transition is valid. The calling system "
+                + "must persist the subject status separately.");
         } catch (DataIntegrityViolationException exception) {
             // A concurrent request may win the unique idempotency-key insert.
             // Do not claim success for this request; caller can retry the same key.
@@ -123,9 +123,10 @@ public class WorkflowEngineService {
         }
 
         if (stage.getTriggerType() == TriggerType.SYSTEM
-                || stage.getTriggerType() == TriggerType.PAYMENT) {
-            if (!"SYSTEM".equals(role)
-                    || !"SYSTEM".equals(normalize(stage.getAssignedRole()))) {
+                || stage.getTriggerType() == TriggerType.EXTERNAL_EVENT) {
+            if (!WorkflowRegistryService.SYSTEM_ROLE.equals(role)
+                    || !WorkflowRegistryService.SYSTEM_ROLE.equals(
+                        normalize(stage.getAssignedRole()))) {
                 throw new WorkflowException(HttpStatus.FORBIDDEN,
                     "This action requires an authorized SYSTEM caller.");
             }
@@ -151,7 +152,7 @@ public class WorkflowEngineService {
         boolean sameRequest =
             previous.getWorkflowDefinitionId().equals(request.workflowDefinitionId())
             && previous.getWorkflowVersion().equals(request.workflowVersion())
-            && previous.getApplicationId().equals(request.applicationId())
+            && previous.getSubjectId().equals(safeTrim(request.subjectId()))
             && previous.getFromStatus().equals(normalize(request.currentStatus()))
             && previous.getActionKey().equals(normalize(request.actionKey()))
             && previous.getTriggerType() == request.triggerType()
@@ -168,7 +169,7 @@ public class WorkflowEngineService {
 
     private TransitionResponse response(WorkflowTransitionLog log, String message) {
         return new TransitionResponse(
-            log.getWorkflowDefinitionId(), log.getWorkflowVersion(), log.getApplicationId(),
+            log.getWorkflowDefinitionId(), log.getWorkflowVersion(), log.getSubjectId(),
             log.getFromStatus(), log.getToStatus(), log.getActionKey(), "VALIDATED",
             message, log.getId()
         );
