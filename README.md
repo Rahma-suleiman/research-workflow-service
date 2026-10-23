@@ -108,6 +108,10 @@ See `docs/PHASE0_BACKUP_AND_ROLLBACK.md` before applying migrations, and
 ./mvnw clean verify
 ```
 
+To test the running engine end to end with a generic example project, run
+`scripts/e2e/start-engine.sh` and then `python3 scripts/e2e/smoke_test.py`.
+See `docs/TESTING_GUIDE.md`.
+
 The integration tests use the separate `workflow_engine_test_db` database defined in `src/test/resources/application-test.properties`.
 
 ## Production
