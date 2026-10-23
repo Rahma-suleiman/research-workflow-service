@@ -14,6 +14,8 @@ public interface WorkflowTransitionLogRepository
     List<WorkflowTransitionLog>
     findByTenantKeyAndSubjectIdOrderByExecutedAtDesc(String tenantKey, String subjectId);
 
+    List<WorkflowTransitionLog> findByInstanceIdOrderByExecutedAtAsc(UUID instanceId);
+
     Optional<WorkflowTransitionLog> findByTenantKeyAndIdempotencyKey(
         String tenantKey,
         String idempotencyKey

@@ -2,6 +2,8 @@ package com.zanzibar.workflow;
 
 import com.jayway.jsonpath.JsonPath;
 import com.zanzibar.workflow.dto.request.ExecuteTransitionRequest;
+import com.zanzibar.workflow.dto.request.InstanceActionRequest;
+import com.zanzibar.workflow.dto.request.StartInstanceRequest;
 import com.zanzibar.workflow.enums.TriggerType;
 import com.zanzibar.workflow.enums.WorkflowScope;
 import com.zanzibar.workflow.enums.WorkflowStatus;
@@ -11,6 +13,7 @@ import com.zanzibar.workflow.model.WorkflowStageConfig;
 import com.zanzibar.workflow.repository.WorkflowDefinitionRepository;
 import com.zanzibar.workflow.service.WorkflowEngineService;
 import com.zanzibar.workflow.service.WorkflowActorSignatureService;
+import com.zanzibar.workflow.service.WorkflowInstanceService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,6 +61,7 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
     @Autowired private PlatformTransactionManager transactionManager;
     @Autowired private MockMvc mockMvc;
     @Autowired private WorkflowActorSignatureService actorSignatureService;
+    @Autowired private WorkflowInstanceService instanceService;
 
     private final String testPrefix = "it-" + UUID.randomUUID();
     private final String registryPrefix =
@@ -97,12 +101,25 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
         stage.setEnabled(true);
         workflow.addStage(stage);
 
+        // A second action from the same status, so two actions can conflict.
+        WorkflowStageConfig withdraw = new WorkflowStageConfig();
+        withdraw.setName("Withdraw application");
+        withdraw.setFromStatus("DRAFT");
+        withdraw.setToStatus("WITHDRAWN");
+        withdraw.setActionKey("WITHDRAW");
+        withdraw.setAssignedRole("APPLICANT");
+        withdraw.setTriggerType(TriggerType.HUMAN);
+        withdraw.setStageOrder(2);
+        withdraw.setEnabled(true);
+        workflow.addStage(withdraw);
+
         workflowId = definitions.saveAndFlush(workflow).getId();
     }
 
     @AfterEach
     void cleanOnlyRowsCreatedByThisTest() {
         jdbc.update("DELETE FROM workflow_transition_logs WHERE idempotency_key LIKE ?", testPrefix + "%");
+        jdbc.update("DELETE FROM workflow_instances WHERE subject_id LIKE ?", testPrefix + "%");
         if (workflowId != null) {
             definitions.deleteById(workflowId);
             definitions.flush();
@@ -111,6 +128,7 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
         jdbc.update("DELETE FROM workflow_subject_types WHERE type_key LIKE ?", registryPrefix + "%");
         jdbc.update("DELETE FROM workflow_roles WHERE role_key LIKE ?", registryPrefix + "%");
         jdbc.update("DELETE FROM workflow_transition_logs WHERE tenant_key = ?", otherTenant);
+        jdbc.update("DELETE FROM workflow_instances WHERE tenant_key = ?", otherTenant);
         jdbc.update("DELETE FROM workflow_definitions WHERE tenant_key = ?", otherTenant);
         jdbc.update("DELETE FROM workflow_roles WHERE tenant_key = ?", otherTenant);
         jdbc.update("DELETE FROM workflow_subject_types WHERE tenant_key = ?", otherTenant);
@@ -444,6 +462,148 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
             .andExpect(status().isOk());
         mockMvc.perform(get("/api/workflows").header("Authorization", replacement))
             .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void conflictingConcurrentActionsOnOneInstanceCannotBothSucceed() throws Exception {
+        UUID instanceId = instanceService.start("DEFAULT", "integration-test",
+            new StartInstanceRequest(subjectType, testPrefix + "-race")).instance().id();
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<String> submit = pool.submit(() -> performConcurrently(
+                instanceId, "SUBMIT", testPrefix + "-submit", ready, start));
+            Future<String> withdraw = pool.submit(() -> performConcurrently(
+                instanceId, "WITHDRAW", testPrefix + "-withdraw", ready, start));
+            assertTrue(ready.await(10, TimeUnit.SECONDS));
+            start.countDown();
+            java.util.List<String> outcomes = java.util.List.of(
+                submit.get(20, TimeUnit.SECONDS), withdraw.get(20, TimeUnit.SECONDS));
+
+            assertEquals(1, outcomes.stream().filter("APPLIED"::equals).count(),
+                "Exactly one of two conflicting actions may be applied: " + outcomes);
+            assertTrue(outcomes.contains("UNPROCESSABLE_ENTITY"),
+                "The losing action must be re-checked against the new status: " + outcomes);
+            String finalStatus = jdbc.queryForObject(
+                "SELECT current_status FROM workflow_instances WHERE id = ?", String.class, instanceId);
+            Integer rows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM workflow_transition_logs WHERE instance_id = ?",
+                Integer.class, instanceId);
+            assertEquals(1, rows);
+            assertTrue(finalStatus.equals("SUBMITTED") || finalStatus.equals("WITHDRAWN"));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void identicalConcurrentRetriesApplyTheActionOnce() throws Exception {
+        UUID instanceId = instanceService.start("DEFAULT", "integration-test",
+            new StartInstanceRequest(subjectType, testPrefix + "-retry")).instance().id();
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<String> first = pool.submit(() -> performConcurrently(
+                instanceId, "SUBMIT", idempotencyKey, ready, start));
+            Future<String> second = pool.submit(() -> performConcurrently(
+                instanceId, "SUBMIT", idempotencyKey, ready, start));
+            assertTrue(ready.await(10, TimeUnit.SECONDS));
+            start.countDown();
+            java.util.List<String> outcomes = java.util.List.of(
+                first.get(20, TimeUnit.SECONDS), second.get(20, TimeUnit.SECONDS));
+
+            assertTrue(outcomes.containsAll(java.util.List.of("APPLIED", "REPLAYED")), outcomes.toString());
+            assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM workflow_transition_logs WHERE instance_id = ?",
+                Integer.class, instanceId));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void instanceLifecycleOverHttp() throws Exception {
+        String subjectId = testPrefix + "-http";
+        String startBody = "{\"subjectType\":\"%s\",\"subjectId\":\"%s\"}".formatted(subjectType, subjectId);
+        String started = mockMvc.perform(post("/api/instances").header("Authorization", serviceAuth())
+                .contentType(MediaType.APPLICATION_JSON).content(startBody))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.currentStatus").value("DRAFT"))
+            .andExpect(jsonPath("$.workflowDefinitionId").value(workflowId.toString()))
+            .andReturn().getResponse().getContentAsString();
+        String instanceId = JsonPath.read(started, "$.id");
+
+        mockMvc.perform(post("/api/instances").header("Authorization", serviceAuth())
+                .contentType(MediaType.APPLICATION_JSON).content(startBody))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value(instanceId));
+
+        mockMvc.perform(get("/api/instances").param("subjectType", subjectType)
+                .param("subjectId", subjectId).param("actorRole", "APPLICANT")
+                .header("Authorization", adminAuth()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.availableActions.length()").value(2))
+            .andExpect(jsonPath("$.terminal").value(false));
+
+        InstanceActionRequest stale = new InstanceActionRequest(
+            "SUBMITTED", TriggerType.HUMAN, "applicant-1", "APPLICANT", null, testPrefix + "-stale");
+        performHttp(instanceId, "SUBMIT", stale, true).andExpect(status().isConflict());
+
+        InstanceActionRequest submit = new InstanceActionRequest(
+            "DRAFT", TriggerType.HUMAN, "applicant-1", "APPLICANT", null, testPrefix + "-submit");
+        performHttp(instanceId, "SUBMIT", submit, false).andExpect(status().isUnauthorized());
+        performHttp(instanceId, "SUBMIT", submit, true)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.fromStatus").value("DRAFT"))
+            .andExpect(jsonPath("$.instance.currentStatus").value("SUBMITTED"))
+            .andExpect(jsonPath("$.instance.terminal").value(true))
+            .andExpect(jsonPath("$.replayed").value(false));
+        performHttp(instanceId, "SUBMIT", submit, true)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.replayed").value(true));
+
+        mockMvc.perform(get("/api/instances/" + instanceId + "/history")
+                .header("Authorization", serviceAuth()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].actionKey").value("SUBMIT"))
+            .andExpect(jsonPath("$[0].actorId").value("applicant-1"));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions performHttp(
+        String instanceId, String action, InstanceActionRequest request, boolean signed
+    ) throws Exception {
+        var builder = post("/api/instances/" + instanceId + "/actions/" + action)
+            .header("Authorization", serviceAuth())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("""
+                {"expectedStatus":%s,"triggerType":"%s","actorId":"%s","actorRole":"%s",
+                 "idempotencyKey":"%s"}
+                """.formatted(request.expectedStatus() == null ? "null"
+                    : "\"" + request.expectedStatus() + "\"", request.triggerType(),
+                    request.actorId(), request.actorRole(), request.idempotencyKey()));
+        if (signed) {
+            builder.header("X-Actor-Signature", actorSignatureService.signInstanceAction(
+                UUID.fromString(instanceId), action, request,
+                "test-only-signing-secret-0123456789"));
+        }
+        return mockMvc.perform(builder);
+    }
+
+    private String performConcurrently(UUID instanceId, String action, String key,
+                                       CountDownLatch ready, CountDownLatch start) throws Exception {
+        ready.countDown();
+        assertTrue(start.await(10, TimeUnit.SECONDS));
+        try {
+            boolean replayed = instanceService.perform("DEFAULT", "integration-test", instanceId,
+                action, new InstanceActionRequest(null, TriggerType.HUMAN, "applicant-1",
+                    "APPLICANT", null, key)).replayed();
+            return replayed ? "REPLAYED" : "APPLIED";
+        } catch (WorkflowException rejected) {
+            return rejected.getStatus().name();
+        }
     }
 
     private String adminAuth() {

@@ -17,6 +17,10 @@ import java.util.UUID;
             columnList = "subject_id, executed_at"
         ),
         @Index(
+            name = "idx_transition_log_instance",
+            columnList = "instance_id, executed_at"
+        ),
+        @Index(
             name = "idx_transition_log_workflow",
             columnList =
                 "workflow_definition_id, workflow_version, executed_at"
@@ -38,6 +42,9 @@ public class WorkflowTransitionLog {
 
     @Column(name = "client_id", length = 100)
     private String clientId;
+
+    @Column(name = "instance_id")
+    private UUID instanceId;
 
     @Column(name = "workflow_definition_id", nullable = false)
     private UUID workflowDefinitionId;
@@ -101,6 +108,14 @@ public class WorkflowTransitionLog {
 
     public void setClientId(String clientId) {
         this.clientId = clientId;
+    }
+
+    public UUID getInstanceId() {
+        return instanceId;
+    }
+
+    public void setInstanceId(UUID instanceId) {
+        this.instanceId = instanceId;
     }
 
     public UUID getWorkflowDefinitionId() {

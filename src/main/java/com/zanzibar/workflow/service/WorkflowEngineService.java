@@ -63,36 +63,11 @@ public class WorkflowEngineService {
             throw new WorkflowException(HttpStatus.CONFLICT,
                 "The requested workflow version does not match the stored version.");
         }
-        if (workflow.getStatus() == WorkflowStatus.DRAFT) {
-            throw new WorkflowException(HttpStatus.CONFLICT,
-                "Transitions cannot use a draft workflow.");
-        }
-        if (workflow.getStatus() == WorkflowStatus.PUBLISHED && !workflow.isActive()) {
-            throw new WorkflowException(HttpStatus.CONFLICT,
-                "The published workflow is inactive and cannot accept new transitions.");
-        }
-        // Archived versions remain valid for subjects pinned to that version.
 
         String fromStatus = normalize(request.currentStatus());
         String actionKey = normalize(request.actionKey());
-        WorkflowStageConfig stage = stageRepository
-            .findByWorkflowDefinition_IdAndFromStatusAndActionKeyAndEnabledTrue(
-                workflow.getId(), fromStatus, actionKey
-            )
-            .orElseThrow(() -> new WorkflowException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Action " + actionKey + " is not configured for status " + fromStatus
-                    + " in workflow version " + request.workflowVersion() + "."));
-
-        if (stage.getTriggerType() != request.triggerType()) {
-            throw new WorkflowException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "The action requires trigger type " + stage.getTriggerType()
-                    + ", not " + request.triggerType() + ".");
-        }
-        validateActor(stage, request);
-        if (stage.isRequiresComments() && isBlank(request.comments())) {
-            throw new WorkflowException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Comments are required for action " + actionKey + ".");
-        }
+        WorkflowStageConfig stage = authorize(workflow, fromStatus, actionKey,
+            request.triggerType(), request.actorId(), request.actorRole(), request.comments());
 
         WorkflowTransitionLog log = new WorkflowTransitionLog();
         log.setTenantKey(tenantKey);
@@ -122,9 +97,57 @@ public class WorkflowEngineService {
         }
     }
 
-    private void validateActor(WorkflowStageConfig stage, ExecuteTransitionRequest request) {
-        String role = normalize(request.actorRole());
-        if (isBlank(request.actorId())) {
+    /**
+     * The transition rules shared by validate-only transitions and workflow
+     * instances: returns the configured stage for this status and action, or
+     * rejects the request when the workflow, trigger, actor role or comments
+     * do not satisfy it.
+     */
+    public WorkflowStageConfig authorize(
+        WorkflowDefinition workflow,
+        String fromStatus,
+        String actionKey,
+        TriggerType triggerType,
+        String actorId,
+        String actorRole,
+        String comments
+    ) {
+        if (workflow.getStatus() == WorkflowStatus.DRAFT) {
+            throw new WorkflowException(HttpStatus.CONFLICT,
+                "Transitions cannot use a draft workflow.");
+        }
+        if (workflow.getStatus() == WorkflowStatus.PUBLISHED && !workflow.isActive()) {
+            throw new WorkflowException(HttpStatus.CONFLICT,
+                "The published workflow is inactive and cannot accept new transitions.");
+        }
+        // Archived versions remain valid for subjects pinned to that version.
+
+        String from = normalize(fromStatus);
+        String action = normalize(actionKey);
+        WorkflowStageConfig stage = stageRepository
+            .findByWorkflowDefinition_IdAndFromStatusAndActionKeyAndEnabledTrue(
+                workflow.getId(), from, action
+            )
+            .orElseThrow(() -> new WorkflowException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Action " + action + " is not configured for status " + from
+                    + " in workflow version " + workflow.getWorkflowVersion() + "."));
+
+        if (stage.getTriggerType() != triggerType) {
+            throw new WorkflowException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "The action requires trigger type " + stage.getTriggerType()
+                    + ", not " + triggerType + ".");
+        }
+        validateActor(stage, actorId, actorRole);
+        if (stage.isRequiresComments() && isBlank(comments)) {
+            throw new WorkflowException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Comments are required for action " + action + ".");
+        }
+        return stage;
+    }
+
+    private void validateActor(WorkflowStageConfig stage, String actorId, String actorRole) {
+        String role = normalize(actorRole);
+        if (isBlank(actorId)) {
             throw new WorkflowException(HttpStatus.FORBIDDEN, "Actor identity is required.");
         }
 

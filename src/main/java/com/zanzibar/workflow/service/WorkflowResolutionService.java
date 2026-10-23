@@ -35,6 +35,13 @@ public class WorkflowResolutionService {
 
     @Transactional(readOnly = true)
     public WorkflowResponse resolveForNewSubject(String tenantKey, String subjectType) {
+        WorkflowDefinition workflow = resolveDefinitionForNewSubject(tenantKey, subjectType);
+        return managementService.getWorkflow(tenantKey, workflow.getId());
+    }
+
+    /** The single active published workflow a new subject of this type must use. */
+    @Transactional(readOnly = true)
+    public WorkflowDefinition resolveDefinitionForNewSubject(String tenantKey, String subjectType) {
         if (subjectType == null || subjectType.isBlank()) {
             throw new WorkflowException("Subject type is required.");
         }
@@ -66,7 +73,7 @@ public class WorkflowResolutionService {
                 + normalizedType + ". Resolve the conflicting workflow configurations.");
         }
 
-        return managementService.getWorkflow(tenantKey, matches.get(0).getId());
+        return matches.get(0);
     }
 
     @Transactional(readOnly = true)

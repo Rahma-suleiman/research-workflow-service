@@ -5,8 +5,10 @@ validating status transitions for any project. Each project registers its own
 roles and subject types (an application type, an order type, a document type,
 ...) and designs workflows as a graph of statuses and actions.
 
-The engine validates and audits each transition. The calling system stores the
-subject's current status and applies the returned `toStatus`.
+The engine can run in two modes:
+
+- **Instance mode (recommended):** the engine stores each subject's current status and applies actions atomically. See `docs/WORKFLOW_INSTANCES.md`.
+- **Validate-only mode:** the engine validates and audits a transition, and the calling system stores the status itself.
 
 ## Concepts
 
@@ -16,6 +18,7 @@ subject's current status and applies the returned `toStatus`.
 - **Workflow definition**: versioned (`DRAFT` → `PUBLISHED` → `ARCHIVED`), with an `initialStatus` and a scope (`ALL_TYPES` or `SELECTED_TYPES`).
 - **Stage**: one allowed transition `fromStatus` + `actionKey` → `toStatus`, with assigned roles, a trigger type (`HUMAN`, `SYSTEM` or `EXTERNAL_EVENT`), optional SLA, and a comments requirement.
 - **Subject**: one record in your system, identified by `subjectId` (any string ID).
+- **Instance**: a subject moving through its pinned workflow version, holding its current status.
 
 ## Requirements
 
@@ -66,15 +69,23 @@ Service account (`WORKFLOW_SERVICE`: the environment service account for `DEFAUL
 
 - `GET /api/workflows/resolve?subjectType=PURCHASE_ORDER` — the active workflow for a new subject; store its id and version on the subject.
 - `GET /api/workflows/{id}/versions/{version}` — the pinned version for an existing subject.
-- `POST /api/transitions/execute` — validate and audit one transition. Also requires the `X-Actor-Signature` header described in `docs/ACTOR_SIGNATURE.md`.
+- `POST /api/instances` — start a subject's workflow (repeat calls return the existing instance).
+- `GET /api/instances/{id}`, `GET /api/instances?subjectType=&subjectId=` — current status and available actions (`?actorRole=` filters them). Also readable by the tenant administrator.
+- `POST /api/instances/{id}/actions/{actionKey}` — apply a signed action to the stored status.
+- `GET /api/instances/{id}/history` — applied transitions.
+- `POST /api/transitions/execute` — validate-only mode: validate and audit one transition.
+
+Action and transition requests also require the `X-Actor-Signature` header described in `docs/ACTOR_SIGNATURE.md`.
 
 ## Onboarding a new project
 
 1. The platform administrator creates a tenant and its ADMIN and SERVICE clients (`docs/MULTI_TENANCY.md`). A single-project deployment can skip this and use the environment accounts in `DEFAULT`.
 2. Register your roles and subject types (via the API, or a SQL seed like `scripts/examples/research-permit-registry.sql`).
 3. Create a workflow with its `initialStatus` and subject types, add stages, check `/validation`, then `/publish`.
-4. In your backend, call `/resolve` when a subject is created and pin the workflow id and version.
-5. For each user action, send a request signed with your SERVICE client's signing secret: a `/api/transitions/execute` request with a unique idempotency key. Apply the returned `toStatus` with a compare-and-set update (`... WHERE status = :fromStatus`).
+4. In your backend, call `POST /api/instances` when a subject is created, and store the returned instance id.
+5. Show users the `availableActions` for their role. Send each action to `/api/instances/{id}/actions/{actionKey}`, signed with your SERVICE client's signing secret, with a unique idempotency key and the `expectedStatus` the user saw.
+
+In validate-only mode, call `/resolve` instead and pin the workflow id and version yourself. For each action, send a signed `/api/transitions/execute` request with a unique idempotency key. Apply the returned `toStatus` with a compare-and-set update (`... WHERE status = :fromStatus`).
 
 ## Database verification
 
@@ -108,6 +119,6 @@ Then confirm the application starts with the real deployment configuration. Open
 
 1. Generic vocabulary: registries, subject types, configurable initial status (done).
 2. Tenants and client apps: per-project credentials, signing secrets, and data isolation (done).
-3. Workflow instances: the engine owns each subject's current status and applies transitions atomically.
+3. Workflow instances: the engine owns each subject's current status and applies transitions atomically (done).
 4. Integration: webhooks/outbox, SLA tracking, external-approval callbacks.
 5. Packaging: Docker image and client SDKs.

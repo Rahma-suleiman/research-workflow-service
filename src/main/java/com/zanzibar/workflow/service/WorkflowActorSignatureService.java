@@ -1,6 +1,7 @@
 package com.zanzibar.workflow.service;
 
 import com.zanzibar.workflow.dto.request.ExecuteTransitionRequest;
+import com.zanzibar.workflow.dto.request.InstanceActionRequest;
 import com.zanzibar.workflow.exception.WorkflowException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -13,6 +14,7 @@ import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 /**
  * Verifies that actor identity, role, trigger, and transition details were
@@ -41,6 +43,22 @@ public class WorkflowActorSignatureService {
         String suppliedSignature,
         String secret
     ) {
+        verifyPayload(canonicalPayload(request), suppliedSignature, secret);
+    }
+
+    /** Verifies an action on a workflow instance (payload workflow-instance-action-v1). */
+    public void verifyInstanceAction(
+        UUID instanceId,
+        String actionKey,
+        InstanceActionRequest request,
+        String suppliedSignature,
+        String secret
+    ) {
+        verifyPayload(instanceActionPayload(instanceId, actionKey, request),
+            suppliedSignature, secret);
+    }
+
+    private void verifyPayload(String payload, String suppliedSignature, String secret) {
         if (secret == null || secret.length() < 32) {
             throw new WorkflowException(
                 HttpStatus.SERVICE_UNAVAILABLE,
@@ -55,7 +73,7 @@ public class WorkflowActorSignatureService {
             );
         }
 
-        byte[] expected = sign(canonicalPayload(request), secret);
+        byte[] expected = sign(payload, secret);
         byte[] supplied;
         try {
             supplied = Base64.getUrlDecoder().decode(suppliedSignature.trim());
@@ -80,13 +98,26 @@ public class WorkflowActorSignatureService {
     }
 
     public String signRequest(ExecuteTransitionRequest request, String secret) {
+        return encodedSignature(canonicalPayload(request), secret);
+    }
+
+    public String signInstanceAction(
+        UUID instanceId,
+        String actionKey,
+        InstanceActionRequest request,
+        String secret
+    ) {
+        return encodedSignature(instanceActionPayload(instanceId, actionKey, request), secret);
+    }
+
+    private String encodedSignature(String payload, String secret) {
         if (secret == null || secret.length() < 32) {
             throw new IllegalStateException(
                 "The actor signing secret must contain at least 32 characters."
             );
         }
         return Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(sign(canonicalPayload(request), secret));
+            .encodeToString(sign(payload, secret));
     }
 
     private byte[] sign(String payload, String secret) {
@@ -100,7 +131,7 @@ public class WorkflowActorSignatureService {
     }
 
     private String canonicalPayload(ExecuteTransitionRequest request) {
-        List<String> values = List.of(
+        return lengthPrefixed("workflow-actor-v1|", List.of(
             safe(request.workflowDefinitionId()),
             safe(request.workflowVersion()),
             safe(request.subjectId()),
@@ -111,10 +142,30 @@ public class WorkflowActorSignatureService {
             normalize(request.actorRole()),
             safe(request.comments()),
             safe(request.idempotencyKey())
-        );
+        ));
+    }
+
+    private String instanceActionPayload(
+        UUID instanceId,
+        String actionKey,
+        InstanceActionRequest request
+    ) {
+        return lengthPrefixed("workflow-instance-action-v1|", List.of(
+            safe(instanceId),
+            normalize(actionKey),
+            normalize(request.expectedStatus()),
+            safe(request.triggerType()),
+            safe(request.actorId()),
+            normalize(request.actorRole()),
+            safe(request.comments()),
+            safe(request.idempotencyKey())
+        ));
+    }
+
+    private String lengthPrefixed(String prefix, List<String> values) {
         // Length-prefix each value so separators or newlines cannot make two
         // different requests produce the same canonical representation.
-        StringBuilder canonical = new StringBuilder("workflow-actor-v1|");
+        StringBuilder canonical = new StringBuilder(prefix);
         for (String value : values) {
             canonical.append(value.getBytes(StandardCharsets.UTF_8).length)
                 .append(':').append(value);

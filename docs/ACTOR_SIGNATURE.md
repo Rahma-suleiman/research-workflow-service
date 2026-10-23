@@ -45,3 +45,15 @@ a signing endpoint to browser clients.
 For production, also restrict network access to this endpoint and rotate the
 shared secret under a coordinated deployment plan. A future asymmetric JWT
 assertion may be preferable if the two services need independent key ownership.
+
+## Instance actions
+
+`POST /api/instances/{id}/actions/{actionKey}` uses the same header, secret, encoding
+and length-prefix rules, with a different canonical payload version:
+`workflow-instance-action-v1|`. Values are appended in this order: instance ID,
+upper-case trimmed actionKey, upper-case trimmed expectedStatus (empty when not sent),
+triggerType, actorId, upper-case trimmed actorRole with a leading `ROLE_` removed,
+comments (empty when null), and idempotencyKey.
+
+Because the version prefix differs, a signature made for one endpoint can never be
+replayed against the other.

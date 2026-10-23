@@ -1,6 +1,7 @@
 package com.zanzibar.workflow.service;
 
 import com.zanzibar.workflow.dto.request.ExecuteTransitionRequest;
+import com.zanzibar.workflow.dto.request.InstanceActionRequest;
 import com.zanzibar.workflow.enums.TriggerType;
 import com.zanzibar.workflow.exception.WorkflowException;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,32 @@ class WorkflowActorSignatureServiceTest {
         WorkflowActorSignatureService unconfigured = new WorkflowActorSignatureService("");
         assertThrows(WorkflowException.class,
             () -> unconfigured.verify(request("APPLICANT", "key-1"), "anything"));
+    }
+
+    @Test
+    void instanceActionSignatureCoversExpectedStatusAndInstance() {
+        UUID instanceId = UUID.fromString("0b7d1f8e-5a3c-4d2e-9f10-1a2b3c4d5e6f");
+        InstanceActionRequest action = new InstanceActionRequest(
+            "NEW", TriggerType.HUMAN, "agent-7", "AGENT", null, "key-1");
+        String signature = service.signInstanceAction(instanceId, "OPEN_TICKET", action, SECRET);
+
+        assertDoesNotThrow(() -> service.verifyInstanceAction(
+            instanceId, "open_ticket", action, signature, SECRET));
+        assertThrows(WorkflowException.class, () -> service.verifyInstanceAction(
+            instanceId, "OPEN_TICKET", new InstanceActionRequest(
+                "OPEN", TriggerType.HUMAN, "agent-7", "AGENT", null, "key-1"), signature, SECRET));
+        assertThrows(WorkflowException.class, () -> service.verifyInstanceAction(
+            UUID.randomUUID(), "OPEN_TICKET", action, signature, SECRET));
+    }
+
+    @Test
+    void validateOnlySignatureCannotBeReusedForInstanceAction() {
+        String transitionSignature = service.signRequest(request("AGENT", "key-1"));
+        InstanceActionRequest action = new InstanceActionRequest(
+            null, TriggerType.HUMAN, "applicant-123", "AGENT", "", "key-1");
+        assertThrows(WorkflowException.class, () -> service.verifyInstanceAction(
+            UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e"), "SUBMIT", action,
+            transitionSignature, SECRET));
     }
 
     private ExecuteTransitionRequest request(String role, String key) {
