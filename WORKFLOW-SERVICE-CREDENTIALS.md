@@ -24,6 +24,13 @@
 - Service username variable: WORKFLOW_SERVICE_USERNAME
 - Service password variable: WORKFLOW_SERVICE_PASSWORD
 - Actor HMAC signing secret variable: WORKFLOW_ACTOR_SIGNING_SECRET
+- Client secret encryption key variable: WORKFLOW_SECRET_ENCRYPTION_KEY
+  (Base64 of 32 random bytes: `openssl rand -base64 32`). Losing it makes stored
+  SERVICE client signing secrets unreadable; rotate those clients' credentials.
+
+Tenant client apps (one ADMIN and/or SERVICE client per project) are created by
+the platform administrator under /api/platform. Their passwords and signing
+secrets are shown once at creation or rotation and are never retrievable later.
 
 Actual production values are stored separately in the approved secrets store.
 Never commit passwords, signing secrets, tokens, or private keys to Git.

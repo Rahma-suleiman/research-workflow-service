@@ -12,32 +12,32 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/** Every lookup is scoped to one tenant so projects never see each other's data. */
 public interface WorkflowDefinitionRepository
         extends JpaRepository<WorkflowDefinition, UUID> {
 
-    Optional<WorkflowDefinition> findByWorkflowKeyAndWorkflowVersion(
-        String workflowKey,
-        Integer workflowVersion
+    Optional<WorkflowDefinition> findByIdAndTenantKey(UUID id, String tenantKey);
+
+    List<WorkflowDefinition> findByTenantKeyOrderByWorkflowKeyAscWorkflowVersionDesc(
+        String tenantKey
     );
 
-    List<WorkflowDefinition> findAllByWorkflowKeyOrderByWorkflowVersionDesc(
+    List<WorkflowDefinition> findAllByTenantKeyAndWorkflowKeyOrderByWorkflowVersionDesc(
+        String tenantKey,
         String workflowKey
     );
 
-    List<WorkflowDefinition> findByStatusAndActiveTrue(
+    List<WorkflowDefinition> findByTenantKeyAndStatusAndActiveTrue(
+        String tenantKey,
         WorkflowStatus status
-    );
-
-    boolean existsByWorkflowKeyAndWorkflowVersion(
-        String workflowKey,
-        Integer workflowVersion
     );
 
     @Query("""
         SELECT DISTINCT w
         FROM WorkflowDefinition w
         LEFT JOIN w.subjectTypes subjectType
-        WHERE w.status = :status
+        WHERE w.tenantKey = :tenantKey
+          AND w.status = :status
           AND w.active = true
           AND (
               w.scope = :allTypes
@@ -48,6 +48,7 @@ public interface WorkflowDefinitionRepository
           )
         """)
     List<WorkflowDefinition> findActivePublishedForSubjectType(
+        @Param("tenantKey") String tenantKey,
         @Param("status") WorkflowStatus status,
         @Param("allTypes") WorkflowScope allTypes,
         @Param("selectedTypes") WorkflowScope selectedTypes,

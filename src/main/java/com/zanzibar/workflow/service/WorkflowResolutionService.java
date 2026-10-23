@@ -34,19 +34,20 @@ public class WorkflowResolutionService {
     }
 
     @Transactional(readOnly = true)
-    public WorkflowResponse resolveForNewSubject(String subjectType) {
+    public WorkflowResponse resolveForNewSubject(String tenantKey, String subjectType) {
         if (subjectType == null || subjectType.isBlank()) {
             throw new WorkflowException("Subject type is required.");
         }
 
         String normalizedType = subjectType.trim().toUpperCase(Locale.ROOT);
-        if (!registryService.activeSubjectTypeKeys().contains(normalizedType)) {
+        if (!registryService.activeSubjectTypeKeys(tenantKey).contains(normalizedType)) {
             throw new WorkflowException(HttpStatus.BAD_REQUEST,
                 "Unknown or inactive subject type: " + subjectType);
         }
 
         List<WorkflowDefinition> matches =
             definitionRepository.findActivePublishedForSubjectType(
+                tenantKey,
                 WorkflowStatus.PUBLISHED,
                 WorkflowScope.ALL_TYPES,
                 WorkflowScope.SELECTED_TYPES,
@@ -65,16 +66,17 @@ public class WorkflowResolutionService {
                 + normalizedType + ". Resolve the conflicting workflow configurations.");
         }
 
-        return managementService.getWorkflow(matches.get(0).getId());
+        return managementService.getWorkflow(tenantKey, matches.get(0).getId());
     }
 
     @Transactional(readOnly = true)
     public WorkflowResponse getPinnedWorkflow(
+        String tenantKey,
         UUID workflowDefinitionId,
         Integer workflowVersion
     ) {
         WorkflowDefinition workflow = definitionRepository
-            .findById(workflowDefinitionId)
+            .findByIdAndTenantKey(workflowDefinitionId, tenantKey)
             .orElseThrow(() -> new WorkflowException(HttpStatus.NOT_FOUND,
                 "Pinned workflow not found: " + workflowDefinitionId));
 
@@ -99,6 +101,6 @@ public class WorkflowResolutionService {
 
         // Archived workflows remain retrievable for subjects that
         // were already pinned to that version.
-        return managementService.getWorkflow(workflowDefinitionId);
+        return managementService.getWorkflow(tenantKey, workflowDefinitionId);
     }
 }

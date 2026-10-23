@@ -39,17 +39,21 @@ public class WorkflowEngineService {
     }
 
     @Transactional
-    public TransitionResponse validateTransition(ExecuteTransitionRequest request) {
+    public TransitionResponse validateTransition(
+        String tenantKey,
+        String clientId,
+        ExecuteTransitionRequest request
+    ) {
         String idempotencyKey = request.idempotencyKey().trim();
         WorkflowTransitionLog previous = logRepository
-            .findByIdempotencyKey(idempotencyKey)
+            .findByTenantKeyAndIdempotencyKey(tenantKey, idempotencyKey)
             .orElse(null);
         if (previous != null) {
             return returnExistingOrReject(previous, request);
         }
 
         WorkflowDefinition workflow = definitionRepository
-            .findById(request.workflowDefinitionId())
+            .findByIdAndTenantKey(request.workflowDefinitionId(), tenantKey)
             .orElseThrow(() -> new WorkflowException(
                 HttpStatus.NOT_FOUND,
                 "Workflow not found: " + request.workflowDefinitionId()
@@ -91,6 +95,8 @@ public class WorkflowEngineService {
         }
 
         WorkflowTransitionLog log = new WorkflowTransitionLog();
+        log.setTenantKey(tenantKey);
+        log.setClientId(clientId);
         log.setWorkflowDefinitionId(workflow.getId());
         log.setWorkflowVersion(workflow.getWorkflowVersion());
         log.setSubjectId(request.subjectId().trim());

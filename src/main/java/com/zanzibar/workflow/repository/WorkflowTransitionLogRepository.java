@@ -12,17 +12,10 @@ public interface WorkflowTransitionLogRepository
         extends JpaRepository<WorkflowTransitionLog, UUID> {
 
     List<WorkflowTransitionLog>
-    findBySubjectIdOrderByExecutedAtDesc(String subjectId);
+    findByTenantKeyAndSubjectIdOrderByExecutedAtDesc(String tenantKey, String subjectId);
 
-    List<WorkflowTransitionLog>
-    findByWorkflowDefinitionIdAndWorkflowVersionOrderByExecutedAtDesc(
-        UUID workflowDefinitionId,
-        Integer workflowVersion
-    );
-
-    Optional<WorkflowTransitionLog> findByIdempotencyKey(
+    Optional<WorkflowTransitionLog> findByTenantKeyAndIdempotencyKey(
+        String tenantKey,
         String idempotencyKey
     );
-
-    boolean existsByIdempotencyKey(String idempotencyKey);
 }

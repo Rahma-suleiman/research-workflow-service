@@ -1,6 +1,11 @@
 
 package com.zanzibar.workflow.config;
 
+import com.zanzibar.workflow.model.WorkflowTenant;
+import com.zanzibar.workflow.repository.WorkflowClientAppRepository;
+import com.zanzibar.workflow.repository.WorkflowTenantRepository;
+import com.zanzibar.workflow.security.WorkflowPrincipal;
+import com.zanzibar.workflow.security.WorkflowUserDetailsService;
 import org.springframework.beans.factory.annotation.Value;
 import jakarta.annotation.PostConstruct;
 import org.springframework.context.annotation.Bean;
@@ -10,12 +15,13 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
+
+import java.util.List;
+import java.util.Map;
 
 @Configuration
 @EnableMethodSecurity
@@ -35,6 +41,9 @@ public class SecurityConfig {
 
     @Value("${workflow.security.actor-signing-secret:}")
     private String actorSigningSecret;
+
+    @Value("${workflow.security.secret-encryption-key:}")
+    private String secretEncryptionKey;
 
     @Value("${spring.datasource.password:}")
     private String databasePassword;
@@ -56,11 +65,12 @@ public class SecurityConfig {
 
         if (isWeak(adminPassword) || isWeak(servicePassword)
                 || isWeak(databasePassword) || isWeak(actorSigningSecret)
-                || actorSigningSecret.length() < 32) {
+                || actorSigningSecret.length() < 32
+                || secretEncryptionKey == null || secretEncryptionKey.isBlank()) {
             throw new IllegalStateException(
                 "Production requires non-default database, administrator, "
-                    + "service, and actor-signing secrets. Configure them through "
-                    + "a secret manager or protected environment variables."
+                    + "service, actor-signing, and secret-encryption secrets. Configure "
+                    + "them through a secret manager or protected environment variables."
             );
         }
     }
@@ -77,21 +87,33 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * The environment administrator is the platform administrator (manages
+     * tenants and client apps) and also administers the DEFAULT tenant. The
+     * environment service account is the DEFAULT tenant's backend. Every other
+     * caller is a tenant client app stored in the database.
+     */
     @Bean
     public UserDetailsService userDetailsService(
-        PasswordEncoder passwordEncoder
+        PasswordEncoder passwordEncoder,
+        WorkflowClientAppRepository clientRepository,
+        WorkflowTenantRepository tenantRepository
     ) {
-        var admin = User.withUsername(adminUsername)
-            .password(passwordEncoder.encode(adminPassword))
-            .roles("ADMINISTRATOR")
-            .build();
+        if (adminUsername.equals(serviceUsername)) {
+            throw new IllegalStateException(
+                "Administrator and service usernames must be different.");
+        }
+        var admin = new WorkflowPrincipal(adminUsername,
+            passwordEncoder.encode(adminPassword), WorkflowTenant.DEFAULT_TENANT, true, true,
+            List.of(WorkflowUserDetailsService.PLATFORM_ADMIN,
+                WorkflowUserDetailsService.ADMINISTRATOR));
+        var workflowService = new WorkflowPrincipal(serviceUsername,
+            passwordEncoder.encode(servicePassword), WorkflowTenant.DEFAULT_TENANT, true, true,
+            List.of(WorkflowUserDetailsService.WORKFLOW_SERVICE));
 
-        var workflowService = User.withUsername(serviceUsername)
-            .password(passwordEncoder.encode(servicePassword))
-            .roles("WORKFLOW_SERVICE")
-            .build();
-
-        return new InMemoryUserDetailsManager(admin, workflowService);
+        return new WorkflowUserDetailsService(
+            Map.of(adminUsername, admin, serviceUsername, workflowService),
+            clientRepository, tenantRepository);
     }
 
     @Bean

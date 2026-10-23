@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -62,15 +63,17 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
     private final String registryPrefix =
         "IT_" + UUID.randomUUID().toString().replace("-", "").toUpperCase() + "_";
     private final String subjectType = registryPrefix + "TYPE";
+    private final String otherTenant = registryPrefix + "TENANT";
     private UUID workflowId;
     private String idempotencyKey;
 
     @BeforeEach
     void createIsolatedPublishedWorkflow() {
         idempotencyKey = testPrefix + "-same-key";
-        jdbc.update("INSERT INTO workflow_subject_types (type_key, name) VALUES (?, ?)",
-            subjectType, "Integration test subject type");
+        jdbc.update("INSERT INTO workflow_subject_types (tenant_key, type_key, name) VALUES (?, ?, ?)",
+            "DEFAULT", subjectType, "Integration test subject type");
         WorkflowDefinition workflow = new WorkflowDefinition();
+        workflow.setTenantKey("DEFAULT");
         workflow.setWorkflowKey("it-workflow-" + UUID.randomUUID());
         workflow.setName("PostgreSQL integration test workflow");
         workflow.setDescription("Created automatically by integration tests");
@@ -107,6 +110,12 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
         jdbc.update("DELETE FROM workflow_definitions WHERE workflow_key LIKE ?", testPrefix + "%");
         jdbc.update("DELETE FROM workflow_subject_types WHERE type_key LIKE ?", registryPrefix + "%");
         jdbc.update("DELETE FROM workflow_roles WHERE role_key LIKE ?", registryPrefix + "%");
+        jdbc.update("DELETE FROM workflow_transition_logs WHERE tenant_key = ?", otherTenant);
+        jdbc.update("DELETE FROM workflow_definitions WHERE tenant_key = ?", otherTenant);
+        jdbc.update("DELETE FROM workflow_roles WHERE tenant_key = ?", otherTenant);
+        jdbc.update("DELETE FROM workflow_subject_types WHERE tenant_key = ?", otherTenant);
+        jdbc.update("DELETE FROM workflow_client_apps WHERE tenant_key = ?", otherTenant);
+        jdbc.update("DELETE FROM workflow_tenants WHERE tenant_key = ?", otherTenant);
     }
 
     @Test
@@ -292,6 +301,151 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
             .andExpect(jsonPath("$.toStatus").value("OPEN"));
     }
 
+    /**
+     * A second project is onboarded as its own tenant. Its data and credentials
+     * are isolated from the DEFAULT tenant in both directions.
+     */
+    @Test
+    void tenantsAreIsolatedAndUseTheirOwnCredentials() throws Exception {
+        mockMvc.perform(post("/api/platform/tenants").header("Authorization", adminAuth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"key\":\"%s\",\"name\":\"Second project\"}".formatted(otherTenant)))
+            .andExpect(status().isCreated());
+
+        String adminCredentials = mockMvc.perform(
+                post("/api/platform/tenants/" + otherTenant + "/clients")
+                    .header("Authorization", adminAuth())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"clientId\":\"%s-admin\",\"kind\":\"ADMIN\"}".formatted(testPrefix)))
+            .andExpect(status().isCreated())
+            .andReturn().getResponse().getContentAsString();
+        String serviceCredentials = mockMvc.perform(
+                post("/api/platform/tenants/" + otherTenant + "/clients")
+                    .header("Authorization", adminAuth())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"clientId\":\"%s-svc\",\"kind\":\"SERVICE\"}".formatted(testPrefix)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.signingSecret").isNotEmpty())
+            .andReturn().getResponse().getContentAsString();
+        String tenantAdmin = basic(testPrefix + "-admin", JsonPath.read(adminCredentials, "$.password"));
+        String tenantService = basic(testPrefix + "-svc", JsonPath.read(serviceCredentials, "$.password"));
+        String tenantSigningSecret = JsonPath.read(serviceCredentials, "$.signingSecret");
+
+        // Tenant administrators cannot reach platform administration.
+        mockMvc.perform(get("/api/platform/tenants").header("Authorization", tenantAdmin))
+            .andExpect(status().isForbidden());
+
+        // The tenant configures a workflow using the same keys the DEFAULT tenant could use.
+        mockMvc.perform(post("/api/roles").header("Authorization", tenantAdmin)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"key\":\"APPLICANT\",\"name\":\"Applicant\"}"))
+            .andExpect(status().isCreated());
+        mockMvc.perform(post("/api/subject-types").header("Authorization", tenantAdmin)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"key\":\"%s\",\"name\":\"Same key as DEFAULT\"}".formatted(subjectType)))
+            .andExpect(status().isCreated());
+        String created = mockMvc.perform(post("/api/workflows").header("Authorization", tenantAdmin)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"workflowKey":"%s-flow","name":"Tenant flow","initialStatus":"DRAFT",
+                     "scope":"SELECTED_TYPES","subjectTypes":["%s"]}
+                    """.formatted(testPrefix, subjectType)))
+            .andExpect(status().isCreated())
+            .andReturn().getResponse().getContentAsString();
+        String tenantWorkflowId = JsonPath.read(created, "$.id");
+        mockMvc.perform(post("/api/workflows/" + tenantWorkflowId + "/stages")
+                .header("Authorization", tenantAdmin)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name":"Submit","fromStatus":"DRAFT","toStatus":"SUBMITTED",
+                     "actionKey":"SUBMIT","assignedRole":"APPLICANT","triggerType":"HUMAN",
+                     "stageOrder":1,"requiresComments":false,"externalApproval":false,"enabled":true}
+                    """))
+            .andExpect(status().isCreated());
+        // Publishing does not conflict with DEFAULT's active workflow for the same subject type.
+        mockMvc.perform(post("/api/workflows/" + tenantWorkflowId + "/publish")
+                .header("Authorization", tenantAdmin))
+            .andExpect(status().isOk());
+
+        // Each tenant sees only its own workflows.
+        mockMvc.perform(get("/api/workflows/" + tenantWorkflowId).header("Authorization", adminAuth()))
+            .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/workflows/" + workflowId).header("Authorization", tenantAdmin))
+            .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/workflows/resolve").param("subjectType", subjectType)
+                .header("Authorization", tenantService))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value(tenantWorkflowId));
+        mockMvc.perform(get("/api/workflows/resolve").param("subjectType", subjectType)
+                .header("Authorization", serviceAuth()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value(workflowId.toString()));
+
+        // Transitions must be signed with the tenant client's own secret.
+        ExecuteTransitionRequest request = new ExecuteTransitionRequest(
+            UUID.fromString(tenantWorkflowId), 1, "SUBJECT-1", "DRAFT", "SUBMIT",
+            TriggerType.HUMAN, "user-1", "APPLICANT", "", idempotencyKey);
+        mockMvc.perform(post("/api/transitions/execute").header("Authorization", tenantService)
+                .header("X-Actor-Signature", actorSignatureService.signRequest(request))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(transitionJson(request)))
+            .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/transitions/execute").header("Authorization", tenantService)
+                .header("X-Actor-Signature",
+                    actorSignatureService.signRequest(request, tenantSigningSecret))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(transitionJson(request)))
+            .andExpect(status().isOk());
+
+        // The same idempotency key is independent in the DEFAULT tenant.
+        ExecuteTransitionRequest defaultRequest = new ExecuteTransitionRequest(
+            workflowId, 1, "SUBJECT-1", "DRAFT", "SUBMIT",
+            TriggerType.HUMAN, "user-1", "APPLICANT", "", idempotencyKey);
+        mockMvc.perform(post("/api/transitions/execute").header("Authorization", serviceAuth())
+                .header("X-Actor-Signature", actorSignatureService.signRequest(defaultRequest))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(transitionJson(defaultRequest)))
+            .andExpect(status().isOk());
+        assertEquals(1, jdbc.queryForObject(
+            "SELECT COUNT(*) FROM workflow_transition_logs WHERE tenant_key = ? AND client_id = ?",
+            Integer.class, otherTenant, testPrefix + "-svc"));
+    }
+
+    @Test
+    void deactivatedOrRotatedClientCredentialsStopWorking() throws Exception {
+        mockMvc.perform(post("/api/platform/tenants").header("Authorization", adminAuth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"key\":\"%s\",\"name\":\"Third project\"}".formatted(otherTenant)))
+            .andExpect(status().isCreated());
+        String clientId = testPrefix + "-admin";
+        String issued = mockMvc.perform(post("/api/platform/tenants/" + otherTenant + "/clients")
+                .header("Authorization", adminAuth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"clientId\":\"%s\",\"kind\":\"ADMIN\"}".formatted(clientId)))
+            .andExpect(status().isCreated())
+            .andReturn().getResponse().getContentAsString();
+        String original = basic(clientId, JsonPath.read(issued, "$.password"));
+        mockMvc.perform(get("/api/workflows").header("Authorization", original))
+            .andExpect(status().isOk());
+
+        String rotated = mockMvc.perform(post("/api/platform/clients/" + clientId + "/rotate-credentials")
+                .header("Authorization", adminAuth()))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        String replacement = basic(clientId, JsonPath.read(rotated, "$.password"));
+        mockMvc.perform(get("/api/workflows").header("Authorization", original))
+            .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/workflows").header("Authorization", replacement))
+            .andExpect(status().isOk());
+
+        mockMvc.perform(put("/api/platform/clients/" + clientId).header("Authorization", adminAuth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"active\":false}"))
+            .andExpect(status().isOk());
+        mockMvc.perform(get("/api/workflows").header("Authorization", replacement))
+            .andExpect(status().isUnauthorized());
+    }
+
     private String adminAuth() {
         return basic("workflow_test_admin", "test-admin-password-not-for-production");
     }
@@ -348,7 +502,7 @@ class PostgresConcurrencyAndSecurityIntegrationTest {
         ready.countDown();
         assertTrue(start.await(10, TimeUnit.SECONDS));
         try {
-            engine.validateTransition(request);
+            engine.validateTransition("DEFAULT", "integration-test", request);
             return true;
         } catch (WorkflowException expectedConflictOrValidationFailure) {
             // A concurrent insert may legitimately lose the unique-key race and return HTTP 409.

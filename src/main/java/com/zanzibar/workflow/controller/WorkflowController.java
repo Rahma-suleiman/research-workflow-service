@@ -12,7 +12,9 @@ import com.zanzibar.workflow.service.WorkflowValidationService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import com.zanzibar.workflow.security.WorkflowPrincipal;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -39,87 +41,97 @@ public class WorkflowController {
     @PostMapping
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowResponse> createWorkflow(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @Valid @RequestBody CreateWorkflowRequest request
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
-            .body(managementService.createWorkflow(request));
+            .body(managementService.createWorkflow(principal.tenantKey(), request));
     }
 
     @GetMapping
     @PreAuthorize("hasRole('ADMINISTRATOR')")
-    public ResponseEntity<List<WorkflowResponse>> getAllWorkflows() {
-        return ResponseEntity.ok(managementService.getAllWorkflows());
+    public ResponseEntity<List<WorkflowResponse>> getAllWorkflows(
+        @AuthenticationPrincipal WorkflowPrincipal principal
+    ) {
+        return ResponseEntity.ok(managementService.getAllWorkflows(principal.tenantKey()));
     }
 
     @GetMapping("/{workflowId}")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowResponse> getWorkflow(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId
     ) {
         return ResponseEntity.ok(
-            managementService.getWorkflow(workflowId)
+            managementService.getWorkflow(principal.tenantKey(), workflowId)
         );
     }
 
     @PutMapping("/{workflowId}")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowResponse> updateWorkflow(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId,
         @Valid @RequestBody UpdateWorkflowRequest request
     ) {
         return ResponseEntity.ok(
-            managementService.updateWorkflow(workflowId, request)
+            managementService.updateWorkflow(principal.tenantKey(), workflowId, request)
         );
     }
 
     @PostMapping("/{workflowId}/versions")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowResponse> createNewVersion(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
-            .body(managementService.createNewVersion(workflowId));
+            .body(managementService.createNewVersion(principal.tenantKey(), workflowId));
     }
 
     @PostMapping("/{workflowId}/stages")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowResponse> addStage(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId,
         @Valid @RequestBody CreateWorkflowStageRequest request
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
-            .body(managementService.addStage(workflowId, request));
+            .body(managementService.addStage(principal.tenantKey(), workflowId, request));
     }
 
     @PutMapping("/{workflowId}/stages/{stageId}")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowResponse> updateStage(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId,
         @PathVariable UUID stageId,
         @Valid @RequestBody CreateWorkflowStageRequest request
     ) {
         return ResponseEntity.ok(
-            managementService.updateStage(workflowId, stageId, request)
+            managementService.updateStage(principal.tenantKey(), workflowId, stageId, request)
         );
     }
 
     @DeleteMapping("/{workflowId}/stages/{stageId}")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<Void> deleteStage(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId,
         @PathVariable UUID stageId
     ) {
-        managementService.deleteStage(workflowId, stageId);
+        managementService.deleteStage(principal.tenantKey(), workflowId, stageId);
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{workflowId}/publish")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowResponse> publishWorkflow(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId
     ) {
         return ResponseEntity.ok(
-            managementService.publishWorkflow(workflowId)
+            managementService.publishWorkflow(principal.tenantKey(), workflowId)
         );
     }
 
@@ -131,9 +143,11 @@ public class WorkflowController {
     @GetMapping("/{workflowId}/validation")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
     public ResponseEntity<WorkflowValidationResponse> validateWorkflow(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId
     ) {
-        return ResponseEntity.ok(validationService.validateWorkflow(workflowId));
+        return ResponseEntity.ok(
+            validationService.validateWorkflow(principal.tenantKey(), workflowId));
     }
 
     /**
@@ -142,28 +156,33 @@ public class WorkflowController {
      */
     @GetMapping("/coverage")
     @PreAuthorize("hasRole('ADMINISTRATOR')")
-    public ResponseEntity<WorkflowCoverageResponse> inspectWorkflowCoverage() {
-        return ResponseEntity.ok(validationService.inspectSubjectTypeCoverage());
+    public ResponseEntity<WorkflowCoverageResponse> inspectWorkflowCoverage(
+        @AuthenticationPrincipal WorkflowPrincipal principal
+    ) {
+        return ResponseEntity.ok(
+            validationService.inspectSubjectTypeCoverage(principal.tenantKey()));
     }
 
     @GetMapping("/resolve")
     @PreAuthorize("hasRole('WORKFLOW_SERVICE')")
     public ResponseEntity<WorkflowResponse> resolveWorkflow(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @RequestParam String subjectType
     ) {
         return ResponseEntity.ok(
-            resolutionService.resolveForNewSubject(subjectType)
+            resolutionService.resolveForNewSubject(principal.tenantKey(), subjectType)
         );
     }
 
     @GetMapping("/{workflowId}/versions/{version}")
     @PreAuthorize("hasRole('WORKFLOW_SERVICE')")
     public ResponseEntity<WorkflowResponse> getPinnedWorkflow(
+        @AuthenticationPrincipal WorkflowPrincipal principal,
         @PathVariable UUID workflowId,
         @PathVariable Integer version
     ) {
         return ResponseEntity.ok(
-            resolutionService.getPinnedWorkflow(workflowId, version)
+            resolutionService.getPinnedWorkflow(principal.tenantKey(), workflowId, version)
         );
     }
 }

@@ -53,8 +53,8 @@ public class WorkflowValidationService {
     }
 
     @Transactional(readOnly = true)
-    public WorkflowValidationResponse validateWorkflow(UUID workflowId) {
-        WorkflowDefinition workflow = definitionRepository.findById(workflowId)
+    public WorkflowValidationResponse validateWorkflow(String tenantKey, UUID workflowId) {
+        WorkflowDefinition workflow = definitionRepository.findByIdAndTenantKey(workflowId, tenantKey)
             .orElseThrow(() -> new WorkflowException(
                 HttpStatus.NOT_FOUND, "Workflow not found: " + workflowId));
         return validateDefinition(workflow);
@@ -69,8 +69,9 @@ public class WorkflowValidationService {
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         Set<String> subjectTypes = normalizedTypes(workflow.getSubjectTypes());
-        Set<String> registeredTypes = registryService.activeSubjectTypeKeys();
-        Set<String> registeredRoles = registryService.activeRoleKeys();
+        Set<String> registeredTypes =
+            registryService.activeSubjectTypeKeys(workflow.getTenantKey());
+        Set<String> registeredRoles = registryService.activeRoleKeys(workflow.getTenantKey());
         String initialStatus = normalize(workflow.getInitialStatus());
 
         if (workflow.getScope() == null) {
@@ -227,14 +228,16 @@ public class WorkflowValidationService {
     }
 
     @Transactional(readOnly = true)
-    public WorkflowCoverageResponse inspectSubjectTypeCoverage() {
+    public WorkflowCoverageResponse inspectSubjectTypeCoverage(String tenantKey) {
         List<WorkflowDefinition> activePublished =
-            definitionRepository.findByStatusAndActiveTrue(WorkflowStatus.PUBLISHED);
+            definitionRepository.findByTenantKeyAndStatusAndActiveTrue(
+                tenantKey, WorkflowStatus.PUBLISHED);
 
         List<WorkflowCoverageResponse.SubjectTypeCoverage> results =
             new ArrayList<>();
 
-        for (String type : registryService.activeSubjectTypeKeys().stream().sorted().toList()) {
+        for (String type : registryService.activeSubjectTypeKeys(tenantKey)
+                .stream().sorted().toList()) {
             List<WorkflowDefinition> matches = activePublished.stream()
                 .filter(workflow -> matchesType(workflow, type))
                 .toList();

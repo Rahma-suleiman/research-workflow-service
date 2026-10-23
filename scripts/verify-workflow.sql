@@ -7,6 +7,7 @@
 \echo '1. Workflow definition'
 SELECT
     id,
+    tenant_key,
     workflow_key,
     name,
     scope,
@@ -46,8 +47,9 @@ FROM workflow_definition_subject_types
 WHERE workflow_definition_id = :'workflow_id'::uuid
 ORDER BY subject_type;
 
-\echo '5. Active published workflow coverage by registered subject type'
+\echo '5. Active published workflow coverage by registered subject type, per tenant'
 SELECT
+    t.tenant_key,
     t.type_key AS subject_type,
     COUNT(w.id) AS matching_active_published_workflows,
     CASE COUNT(w.id)
@@ -59,7 +61,8 @@ SELECT
         AS matching_workflows
 FROM workflow_subject_types t
 LEFT JOIN workflow_definitions w
-    ON w.status = 'PUBLISHED'
+    ON w.tenant_key = t.tenant_key
+   AND w.status = 'PUBLISHED'
    AND w.active = TRUE
    AND (
        w.scope = 'ALL_TYPES'
@@ -74,8 +77,8 @@ LEFT JOIN workflow_definitions w
        )
    )
 WHERE t.active = TRUE
-GROUP BY t.type_key
-ORDER BY t.type_key;
+GROUP BY t.tenant_key, t.type_key
+ORDER BY t.tenant_key, t.type_key;
 
 \echo '6. Duplicate stage order check (should return no rows)'
 SELECT stage_order, COUNT(*) AS duplicate_count

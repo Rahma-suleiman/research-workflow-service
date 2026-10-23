@@ -10,7 +10,12 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "workflow_roles")
+@IdClass(RegistryKey.class)
 public class WorkflowRole {
+
+    @Id
+    @Column(name = "tenant_key", length = 60)
+    private String tenantKey;
 
     @Id
     @Column(name = "role_key", length = 100)
@@ -41,6 +46,14 @@ public class WorkflowRole {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = Instant.now();
+    }
+
+    public String getTenantKey() {
+        return tenantKey;
+    }
+
+    public void setTenantKey(String tenantKey) {
+        this.tenantKey = tenantKey;
     }
 
     public String getKey() {

@@ -23,8 +23,8 @@ import java.util.UUID;
         )
     },
     uniqueConstraints = @UniqueConstraint(
-        name = "uk_transition_idempotency_key",
-        columnNames = "idempotency_key"
+        name = "uk_transition_tenant_idempotency_key",
+        columnNames = {"tenant_key", "idempotency_key"}
     )
 )
 public class WorkflowTransitionLog {
@@ -32,6 +32,12 @@ public class WorkflowTransitionLog {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    @Column(name = "tenant_key", nullable = false, length = 60)
+    private String tenantKey;
+
+    @Column(name = "client_id", length = 100)
+    private String clientId;
 
     @Column(name = "workflow_definition_id", nullable = false)
     private UUID workflowDefinitionId;
@@ -79,6 +85,22 @@ public class WorkflowTransitionLog {
 
     public UUID getId() {
         return id;
+    }
+
+    public String getTenantKey() {
+        return tenantKey;
+    }
+
+    public void setTenantKey(String tenantKey) {
+        this.tenantKey = tenantKey;
+    }
+
+    public String getClientId() {
+        return clientId;
+    }
+
+    public void setClientId(String clientId) {
+        this.clientId = clientId;
     }
 
     public UUID getWorkflowDefinitionId() {

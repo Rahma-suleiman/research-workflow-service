@@ -18,8 +18,8 @@ import java.util.UUID;
     name = "workflow_definitions",
     uniqueConstraints = {
         @UniqueConstraint(
-            name = "uk_workflow_key_version",
-            columnNames = {"workflow_key", "workflow_version"}
+            name = "uk_workflow_tenant_key_version",
+            columnNames = {"tenant_key", "workflow_key", "workflow_version"}
         ),
         @UniqueConstraint(
             name = "uk_workflow_id_version",
@@ -32,6 +32,9 @@ public class WorkflowDefinition {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    @Column(name = "tenant_key", nullable = false, length = 60, updatable = false)
+    private String tenantKey;
 
     @Column(name = "workflow_key", nullable = false, length = 100)
     private String workflowKey;
@@ -112,6 +115,14 @@ public class WorkflowDefinition {
 
     public UUID getId() {
         return id;
+    }
+
+    public String getTenantKey() {
+        return tenantKey;
+    }
+
+    public void setTenantKey(String tenantKey) {
+        this.tenantKey = tenantKey;
     }
 
     public String getWorkflowKey() {

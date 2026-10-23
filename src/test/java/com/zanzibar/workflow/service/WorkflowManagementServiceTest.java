@@ -32,6 +32,8 @@ class WorkflowManagementServiceTest {
     private final WorkflowManagementService service =
         new WorkflowManagementService(definitions, stages, validation, registry);
 
+    private static final String TENANT = "DEFAULT";
+
     private final UUID draftId = UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e");
 
     @Test
@@ -40,14 +42,14 @@ class WorkflowManagementServiceTest {
         WorkflowDefinition existing = workflow(
             UUID.fromString("5c2d11a4-0d8e-41e9-b2b2-36b2cda99e7f"),
             "existing-all-types", WorkflowStatus.PUBLISHED);
-        when(definitions.findById(draftId)).thenReturn(Optional.of(draft));
+        when(definitions.findByIdAndTenantKey(draftId, TENANT)).thenReturn(Optional.of(draft));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(draftId))
             .thenReturn(List.of(stage("DRAFT", "SUBMITTED", "SUBMIT", 1)));
-        when(definitions.findByStatusAndActiveTrue(WorkflowStatus.PUBLISHED))
+        when(definitions.findByTenantKeyAndStatusAndActiveTrue(TENANT, WorkflowStatus.PUBLISHED))
             .thenReturn(List.of(existing));
 
         WorkflowException error = assertThrows(WorkflowException.class,
-            () -> service.publishWorkflow(draftId));
+            () -> service.publishWorkflow(TENANT, draftId));
         assertEquals(HttpStatus.CONFLICT, error.getStatus());
         verify(definitions, never()).save(existing);
     }
@@ -55,12 +57,12 @@ class WorkflowManagementServiceTest {
     @Test
     void publishingRejectsEnabledTransitionThatCannotBeReachedFromDraft() {
         WorkflowDefinition draft = workflow(draftId, "standard-flow", WorkflowStatus.DRAFT);
-        when(definitions.findById(draftId)).thenReturn(Optional.of(draft));
+        when(definitions.findByIdAndTenantKey(draftId, TENANT)).thenReturn(Optional.of(draft));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(draftId))
             .thenReturn(List.of(stage("ORPHAN_STATUS", "SOMEWHERE", "ORPHAN_ACTION", 1)));
 
         WorkflowException error = assertThrows(WorkflowException.class,
-            () -> service.publishWorkflow(draftId));
+            () -> service.publishWorkflow(TENANT, draftId));
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, error.getStatus());
         verify(definitions, never()).save(any());
     }
@@ -68,7 +70,7 @@ class WorkflowManagementServiceTest {
     @Test
     void creatingWorkflowForUnregisteredSubjectTypeIsRejected() {
         WorkflowException error = assertThrows(WorkflowException.class,
-            () -> service.createWorkflow(new CreateWorkflowRequest(
+            () -> service.createWorkflow(TENANT, new CreateWorkflowRequest(
                 "orders", "Orders", null, "NEW",
                 WorkflowScope.SELECTED_TYPES, Set.of("UNKNOWN_TYPE"))));
         assertEquals(HttpStatus.BAD_REQUEST, error.getStatus());
@@ -78,10 +80,10 @@ class WorkflowManagementServiceTest {
     @Test
     void addingStageWithUnregisteredRoleIsRejected() {
         WorkflowDefinition draft = workflow(draftId, "standard-flow", WorkflowStatus.DRAFT);
-        when(definitions.findById(draftId)).thenReturn(Optional.of(draft));
+        when(definitions.findByIdAndTenantKey(draftId, TENANT)).thenReturn(Optional.of(draft));
 
         WorkflowException error = assertThrows(WorkflowException.class,
-            () -> service.addStage(draftId, new CreateWorkflowStageRequest(
+            () -> service.addStage(TENANT, draftId, new CreateWorkflowStageRequest(
                 "Approve", null, "NEW", "APPROVED", "APPROVE", "AUDITOR",
                 TriggerType.HUMAN, 1, null, false, false, null, true)));
         assertTrue(error.getMessage().contains("AUDITOR"));
@@ -91,6 +93,7 @@ class WorkflowManagementServiceTest {
     private WorkflowDefinition workflow(UUID id, String key, WorkflowStatus status) {
         WorkflowDefinition workflow = mock(WorkflowDefinition.class);
         when(workflow.getId()).thenReturn(id);
+        when(workflow.getTenantKey()).thenReturn(TENANT);
         when(workflow.getWorkflowKey()).thenReturn(key);
         when(workflow.getStatus()).thenReturn(status);
         when(workflow.getScope()).thenReturn(WorkflowScope.SELECTED_TYPES);

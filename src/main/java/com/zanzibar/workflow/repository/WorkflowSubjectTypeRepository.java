@@ -1,15 +1,16 @@
 
 package com.zanzibar.workflow.repository;
 
+import com.zanzibar.workflow.model.RegistryKey;
 import com.zanzibar.workflow.model.WorkflowSubjectType;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
 
 public interface WorkflowSubjectTypeRepository
-        extends JpaRepository<WorkflowSubjectType, String> {
+        extends JpaRepository<WorkflowSubjectType, RegistryKey> {
 
-    List<WorkflowSubjectType> findAllByOrderByKeyAsc();
+    List<WorkflowSubjectType> findByTenantKeyOrderByKeyAsc(String tenantKey);
 
-    List<WorkflowSubjectType> findByActiveTrueOrderByKeyAsc();
+    List<WorkflowSubjectType> findByTenantKeyAndActiveTrueOrderByKeyAsc(String tenantKey);
 }

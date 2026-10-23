@@ -50,19 +50,23 @@ public class WorkflowManagementService {
         this.registryService = registryService;
     }
 
-    public WorkflowResponse createWorkflow(CreateWorkflowRequest request) {
-        validateScope(request.scope(), request.subjectTypes());
+    public WorkflowResponse createWorkflow(
+        String tenantKey,
+        CreateWorkflowRequest request
+    ) {
+        validateScope(tenantKey, request.scope(), request.subjectTypes());
 
         String key = request.workflowKey().trim();
 
         int nextVersion = definitionRepository
-            .findAllByWorkflowKeyOrderByWorkflowVersionDesc(key)
+            .findAllByTenantKeyAndWorkflowKeyOrderByWorkflowVersionDesc(tenantKey, key)
             .stream()
             .mapToInt(WorkflowDefinition::getWorkflowVersion)
             .max()
             .orElse(0) + 1;
 
         WorkflowDefinition workflow = new WorkflowDefinition();
+        workflow.setTenantKey(tenantKey);
         workflow.setWorkflowKey(key);
         workflow.setName(request.name().trim());
         workflow.setDescription(request.description());
@@ -77,12 +81,13 @@ public class WorkflowManagementService {
     }
 
     public WorkflowResponse updateWorkflow(
+        String tenantKey,
         UUID workflowId,
         UpdateWorkflowRequest request
     ) {
-        WorkflowDefinition workflow = getDefinition(workflowId);
+        WorkflowDefinition workflow = getDefinition(tenantKey, workflowId);
         ensureDraft(workflow);
-        validateScope(request.scope(), request.subjectTypes());
+        validateScope(tenantKey, request.scope(), request.subjectTypes());
 
         workflow.setName(request.name().trim());
         workflow.setDescription(request.description());
@@ -93,8 +98,8 @@ public class WorkflowManagementService {
         return toResponse(definitionRepository.save(workflow));
     }
 
-    public WorkflowResponse createNewVersion(UUID sourceWorkflowId) {
-        WorkflowDefinition source = getDefinition(sourceWorkflowId);
+    public WorkflowResponse createNewVersion(String tenantKey, UUID sourceWorkflowId) {
+        WorkflowDefinition source = getDefinition(tenantKey, sourceWorkflowId);
 
         if (source.getStatus() == WorkflowStatus.DRAFT) {
             throw new WorkflowException(HttpStatus.CONFLICT,
@@ -102,8 +107,8 @@ public class WorkflowManagementService {
         }
 
         int nextVersion = definitionRepository
-            .findAllByWorkflowKeyOrderByWorkflowVersionDesc(
-                source.getWorkflowKey()
+            .findAllByTenantKeyAndWorkflowKeyOrderByWorkflowVersionDesc(
+                tenantKey, source.getWorkflowKey()
             )
             .stream()
             .mapToInt(WorkflowDefinition::getWorkflowVersion)
@@ -111,6 +116,7 @@ public class WorkflowManagementService {
             .orElse(source.getWorkflowVersion()) + 1;
 
         WorkflowDefinition draft = new WorkflowDefinition();
+        draft.setTenantKey(tenantKey);
         draft.setWorkflowKey(source.getWorkflowKey());
         draft.setName(source.getName());
         draft.setDescription(source.getDescription());
@@ -131,12 +137,13 @@ public class WorkflowManagementService {
     }
 
     public WorkflowResponse addStage(
+        String tenantKey,
         UUID workflowId,
         CreateWorkflowStageRequest request
     ) {
-        WorkflowDefinition workflow = getDefinition(workflowId);
+        WorkflowDefinition workflow = getDefinition(tenantKey, workflowId);
         ensureDraft(workflow);
-        validateStage(request);
+        validateStage(tenantKey, request);
 
         WorkflowStageConfig stage = new WorkflowStageConfig();
         copyRequestValues(request, stage);
@@ -147,13 +154,14 @@ public class WorkflowManagementService {
     }
 
     public WorkflowResponse updateStage(
+        String tenantKey,
         UUID workflowId,
         UUID stageId,
         CreateWorkflowStageRequest request
     ) {
-        WorkflowDefinition workflow = getDefinition(workflowId);
+        WorkflowDefinition workflow = getDefinition(tenantKey, workflowId);
         ensureDraft(workflow);
-        validateStage(request);
+        validateStage(tenantKey, request);
 
         WorkflowStageConfig stage = stageRepository.findById(stageId)
             .orElseThrow(() -> new WorkflowException(
@@ -169,8 +177,8 @@ public class WorkflowManagementService {
         return toResponse(definitionRepository.save(workflow));
     }
 
-    public void deleteStage(UUID workflowId, UUID stageId) {
-        WorkflowDefinition workflow = getDefinition(workflowId);
+    public void deleteStage(String tenantKey, UUID workflowId, UUID stageId) {
+        WorkflowDefinition workflow = getDefinition(tenantKey, workflowId);
         ensureDraft(workflow);
 
         WorkflowStageConfig stage = stageRepository.findById(stageId)
@@ -187,8 +195,8 @@ public class WorkflowManagementService {
         definitionRepository.save(workflow);
     }
 
-    public WorkflowResponse publishWorkflow(UUID workflowId) {
-        WorkflowDefinition workflow = getDefinition(workflowId);
+    public WorkflowResponse publishWorkflow(String tenantKey, UUID workflowId) {
+        WorkflowDefinition workflow = getDefinition(tenantKey, workflowId);
         ensureDraft(workflow);
         validateBeforePublish(workflow);
 
@@ -197,7 +205,8 @@ public class WorkflowManagementService {
         // A new version may replace only the active version of the same key
         // and only when its scope is unchanged.
         List<WorkflowDefinition> activeWorkflows =
-            definitionRepository.findByStatusAndActiveTrue(WorkflowStatus.PUBLISHED);
+            definitionRepository.findByTenantKeyAndStatusAndActiveTrue(
+                tenantKey, WorkflowStatus.PUBLISHED);
         List<WorkflowDefinition> versionsToArchive = new ArrayList<>();
 
         for (WorkflowDefinition existing : activeWorkflows) {
@@ -232,19 +241,21 @@ public class WorkflowManagementService {
         return toResponse(definitionRepository.save(workflow));
     }
 
-    public WorkflowResponse getWorkflow(UUID workflowId) {
-        return toResponse(getDefinition(workflowId));
+    public WorkflowResponse getWorkflow(String tenantKey, UUID workflowId) {
+        return toResponse(getDefinition(tenantKey, workflowId));
     }
 
-    public List<WorkflowResponse> getAllWorkflows() {
-        return definitionRepository.findAll()
+    public List<WorkflowResponse> getAllWorkflows(String tenantKey) {
+        return definitionRepository
+            .findByTenantKeyOrderByWorkflowKeyAscWorkflowVersionDesc(tenantKey)
             .stream()
             .map(this::toResponse)
             .toList();
     }
 
-    private WorkflowDefinition getDefinition(UUID workflowId) {
-        return definitionRepository.findById(workflowId)
+    private WorkflowDefinition getDefinition(String tenantKey, UUID workflowId) {
+        // A workflow of another tenant is reported exactly like a missing one.
+        return definitionRepository.findByIdAndTenantKey(workflowId, tenantKey)
             .orElseThrow(() -> new WorkflowException(
                 HttpStatus.NOT_FOUND, "Workflow not found: " + workflowId));
     }
@@ -258,6 +269,7 @@ public class WorkflowManagementService {
     }
 
     private void validateScope(
+        String tenantKey,
         WorkflowScope scope,
         Set<String> subjectTypes
     ) {
@@ -278,7 +290,7 @@ public class WorkflowManagementService {
             );
         }
         if (subjectTypes != null) {
-            Set<String> registered = registryService.activeSubjectTypeKeys();
+            Set<String> registered = registryService.activeSubjectTypeKeys(tenantKey);
             for (String type : subjectTypes) {
                 if (type == null || !registered.contains(
                         type.trim().toUpperCase(Locale.ROOT))) {
@@ -308,7 +320,7 @@ public class WorkflowManagementService {
         return normalized;
     }
 
-    private void validateStage(CreateWorkflowStageRequest stage) {
+    private void validateStage(String tenantKey, CreateWorkflowStageRequest stage) {
         if (!ACTION_KEY_PATTERN.matcher(stage.actionKey().trim()).matches()) {
             throw new WorkflowException(
                 "Invalid action key. Use letters, numbers and underscores; "
@@ -318,7 +330,7 @@ public class WorkflowManagementService {
 
         String role = normalizeRole(stage.assignedRole());
 
-        Set<String> registeredRoles = registryService.activeRoleKeys();
+        Set<String> registeredRoles = registryService.activeRoleKeys(tenantKey);
         for (String assigned : role.split(",")) {
             if (!registeredRoles.contains(assigned.trim())) {
                 throw new WorkflowException(

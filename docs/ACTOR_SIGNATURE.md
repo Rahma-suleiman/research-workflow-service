@@ -7,8 +7,16 @@ from being changed by a caller that does not possess the shared signing secret.
 
 ## Configuration
 
-Set `WORKFLOW_ACTOR_SIGNING_SECRET` to a cryptographically random secret of at
-least 32 characters in both the trusted calling backend and this service.
+Each service caller signs with its own secret:
+
+- The environment service account (DEFAULT tenant) uses `WORKFLOW_ACTOR_SIGNING_SECRET`,
+  a cryptographically random secret of at least 32 characters configured in both
+  the trusted calling backend and this service.
+- A tenant's SERVICE client app uses the `signingSecret` returned once when the
+  client is created or its credentials are rotated (`/api/platform/...`). The
+  engine stores it encrypted with `WORKFLOW_SECRET_ENCRYPTION_KEY`.
+
+A signature made with another client's secret is rejected.
 Do not commit the secret or send it to the browser. Use a secret manager in
 production. The `prod`/`production` profile refuses startup when known sample or
 short secrets are configured.

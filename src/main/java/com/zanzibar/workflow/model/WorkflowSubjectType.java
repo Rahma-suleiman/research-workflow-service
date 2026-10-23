@@ -10,7 +10,12 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "workflow_subject_types")
+@IdClass(RegistryKey.class)
 public class WorkflowSubjectType {
+
+    @Id
+    @Column(name = "tenant_key", length = 60)
+    private String tenantKey;
 
     @Id
     @Column(name = "type_key", length = 60)
@@ -41,6 +46,14 @@ public class WorkflowSubjectType {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = Instant.now();
+    }
+
+    public String getTenantKey() {
+        return tenantKey;
+    }
+
+    public void setTenantKey(String tenantKey) {
+        this.tenantKey = tenantKey;
     }
 
     public String getKey() {

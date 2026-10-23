@@ -30,13 +30,15 @@ class WorkflowValidationServiceTest {
             List.of("APPLICANT", "REVIEWER"),
             List.of("TYPE_A", "TYPE_B", "TYPE_C")));
 
+    private static final String TENANT = "DEFAULT";
+
     private final UUID workflowId =
         UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e");
 
     @Test
     void validReachableDraftGraphIsPublishable() {
         WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
-        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(definitions.findByIdAndTenantKey(workflowId, TENANT)).thenReturn(Optional.of(workflow));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
             .thenReturn(List.of(
                 stage("DRAFT", "SUBMITTED", "SUBMIT", "APPLICANT",
@@ -45,7 +47,7 @@ class WorkflowValidationServiceTest {
                     TriggerType.EXTERNAL_EVENT, 2)
             ));
 
-        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+        WorkflowValidationResponse report = service.validateWorkflow(TENANT, workflowId);
 
         assertTrue(report.publishable(), report.errors().toString());
         assertEquals(2, report.totalTransitions());
@@ -56,7 +58,7 @@ class WorkflowValidationServiceTest {
     @Test
     void unreachableEnabledTransitionPreventsPublication() {
         WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
-        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(definitions.findByIdAndTenantKey(workflowId, TENANT)).thenReturn(Optional.of(workflow));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
             .thenReturn(List.of(
                 stage("DRAFT", "SUBMITTED", "SUBMIT", "APPLICANT",
@@ -65,7 +67,7 @@ class WorkflowValidationServiceTest {
                     TriggerType.HUMAN, 2)
             ));
 
-        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+        WorkflowValidationResponse report = service.validateWorkflow(TENANT, workflowId);
 
         assertFalse(report.publishable());
         assertTrue(report.errors().stream().anyMatch(
@@ -75,7 +77,7 @@ class WorkflowValidationServiceTest {
     @Test
     void systemRoleCannotBeCombinedWithHumanRoleForExternalEventTransition() {
         WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
-        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(definitions.findByIdAndTenantKey(workflowId, TENANT)).thenReturn(Optional.of(workflow));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
             .thenReturn(List.of(
                 stage("DRAFT", "SUBMITTED", "SUBMIT", "APPLICANT",
@@ -84,7 +86,7 @@ class WorkflowValidationServiceTest {
                     TriggerType.EXTERNAL_EVENT, 2)
             ));
 
-        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+        WorkflowValidationResponse report = service.validateWorkflow(TENANT, workflowId);
 
         assertFalse(report.publishable());
         assertTrue(report.errors().stream().anyMatch(
@@ -99,10 +101,10 @@ class WorkflowValidationServiceTest {
         WorkflowDefinition duplicate = coverageWorkflow(
             "another-workflow", WorkflowScope.SELECTED_TYPES, Set.of("TYPE_A"));
 
-        when(definitions.findByStatusAndActiveTrue(WorkflowStatus.PUBLISHED))
+        when(definitions.findByTenantKeyAndStatusAndActiveTrue(TENANT, WorkflowStatus.PUBLISHED))
             .thenReturn(List.of(first, duplicate));
 
-        WorkflowCoverageResponse report = service.inspectSubjectTypeCoverage();
+        WorkflowCoverageResponse report = service.inspectSubjectTypeCoverage(TENANT);
 
         assertFalse(report.allSubjectTypesCovered());
         assertEquals("AMBIGUOUS", report.subjectTypes().stream()
@@ -120,14 +122,14 @@ class WorkflowValidationServiceTest {
     void reachabilityStartsFromTheWorkflowsOwnInitialStatus() {
         WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
         when(workflow.getInitialStatus()).thenReturn("NEW");
-        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(definitions.findByIdAndTenantKey(workflowId, TENANT)).thenReturn(Optional.of(workflow));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
             .thenReturn(List.of(
                 stage("NEW", "OPEN", "OPEN_TICKET", "APPLICANT", TriggerType.HUMAN, 1),
                 stage("OPEN", "CLOSED", "CLOSE", "REVIEWER", TriggerType.HUMAN, 2)
             ));
 
-        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+        WorkflowValidationResponse report = service.validateWorkflow(TENANT, workflowId);
 
         assertTrue(report.publishable(), report.errors().toString());
     }
@@ -136,13 +138,13 @@ class WorkflowValidationServiceTest {
     void graphThatDoesNotStartAtInitialStatusIsRejected() {
         WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
         when(workflow.getInitialStatus()).thenReturn("NEW");
-        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(definitions.findByIdAndTenantKey(workflowId, TENANT)).thenReturn(Optional.of(workflow));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
             .thenReturn(List.of(
                 stage("DRAFT", "SUBMITTED", "SUBMIT", "APPLICANT", TriggerType.HUMAN, 1)
             ));
 
-        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+        WorkflowValidationResponse report = service.validateWorkflow(TENANT, workflowId);
 
         assertFalse(report.publishable());
         assertTrue(report.errors().stream().anyMatch(
@@ -152,13 +154,13 @@ class WorkflowValidationServiceTest {
     @Test
     void unregisteredRolePreventsPublication() {
         WorkflowDefinition workflow = workflow(WorkflowStatus.DRAFT, false);
-        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(definitions.findByIdAndTenantKey(workflowId, TENANT)).thenReturn(Optional.of(workflow));
         when(stages.findByWorkflowDefinition_IdOrderByStageOrderAsc(workflowId))
             .thenReturn(List.of(
                 stage("DRAFT", "SUBMITTED", "SUBMIT", "AUDITOR", TriggerType.HUMAN, 1)
             ));
 
-        WorkflowValidationResponse report = service.validateWorkflow(workflowId);
+        WorkflowValidationResponse report = service.validateWorkflow(TENANT, workflowId);
 
         assertFalse(report.publishable());
         assertTrue(report.errors().stream().anyMatch(
@@ -168,6 +170,7 @@ class WorkflowValidationServiceTest {
     private WorkflowDefinition workflow(WorkflowStatus status, boolean active) {
         WorkflowDefinition mockWorkflow = mock(WorkflowDefinition.class);
         when(mockWorkflow.getId()).thenReturn(workflowId);
+        when(mockWorkflow.getTenantKey()).thenReturn(TENANT);
         when(mockWorkflow.getWorkflowKey()).thenReturn("standard-flow");
         when(mockWorkflow.getWorkflowVersion()).thenReturn(2);
         when(mockWorkflow.getStatus()).thenReturn(status);

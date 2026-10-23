@@ -14,7 +14,7 @@ require() {
 for name in WORKFLOW_DB_URL WORKFLOW_DB_USERNAME WORKFLOW_DB_PASSWORD \
             WORKFLOW_ADMIN_USERNAME WORKFLOW_ADMIN_PASSWORD \
             WORKFLOW_SERVICE_USERNAME WORKFLOW_SERVICE_PASSWORD \
-            WORKFLOW_ACTOR_SIGNING_SECRET; do
+            WORKFLOW_ACTOR_SIGNING_SECRET WORKFLOW_SECRET_ENCRYPTION_KEY; do
   require "$name"
 done
 
@@ -32,6 +32,10 @@ done
 
 [[ ${#WORKFLOW_ACTOR_SIGNING_SECRET} -ge 32 ]] \
   || fail "WORKFLOW_ACTOR_SIGNING_SECRET must contain at least 32 characters."
+
+key_bytes=$(printf '%s' "$WORKFLOW_SECRET_ENCRYPTION_KEY" | base64 -d 2>/dev/null | wc -c | tr -d ' ')
+[[ "$key_bytes" == "32" ]] \
+  || fail "WORKFLOW_SECRET_ENCRYPTION_KEY must be Base64 for exactly 32 bytes (openssl rand -base64 32)."
 
 if [[ "${WORKFLOW_ADMIN_USERNAME}" == "${WORKFLOW_SERVICE_USERNAME}" ]]; then
   fail "Administrator and service usernames must be different."

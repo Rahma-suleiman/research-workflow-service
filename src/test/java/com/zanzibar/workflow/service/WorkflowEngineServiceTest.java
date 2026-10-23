@@ -29,18 +29,20 @@ class WorkflowEngineServiceTest {
     private final WorkflowTransitionLogRepository logs = mock(WorkflowTransitionLogRepository.class);
     private final WorkflowEngineService engine = new WorkflowEngineService(definitions, stages, logs);
 
+    private static final String TENANT = "DEFAULT";
+
     private final UUID workflowId = UUID.fromString("f3ccca23-b655-4e65-a1ed-ea1d1b8c8a4e");
     private final String subjectId = "ORDER-2026-00042";
 
     @BeforeEach
     void setUp() {
-        when(logs.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(logs.findByTenantKeyAndIdempotencyKey(TENANT, "key-1")).thenReturn(Optional.empty());
         WorkflowDefinition workflow = mock(WorkflowDefinition.class);
         when(workflow.getId()).thenReturn(workflowId);
         when(workflow.getWorkflowVersion()).thenReturn(2);
         when(workflow.getStatus()).thenReturn(WorkflowStatus.PUBLISHED);
         when(workflow.isActive()).thenReturn(true);
-        when(definitions.findById(workflowId)).thenReturn(Optional.of(workflow));
+        when(definitions.findByIdAndTenantKey(workflowId, TENANT)).thenReturn(Optional.of(workflow));
 
         WorkflowStageConfig stage = new WorkflowStageConfig();
         stage.setFromStatus("DRAFT");
@@ -58,7 +60,7 @@ class WorkflowEngineServiceTest {
 
     @Test
     void validatesConfiguredTransitionAndWritesAuditLog() {
-        TransitionResponse response = engine.validateTransition(request("APPLICANT", "key-1"));
+        TransitionResponse response = engine.validateTransition(TENANT, "test-client", request("APPLICANT", "key-1"));
         assertEquals("VALIDATED", response.decision());
         assertEquals("SUBMITTED", response.toStatus());
         verify(logs).saveAndFlush(any(WorkflowTransitionLog.class));
@@ -67,17 +69,17 @@ class WorkflowEngineServiceTest {
     @Test
     void rejectsRoleThatDoesNotMatchConfiguredRole() {
         WorkflowException error = assertThrows(WorkflowException.class,
-            () -> engine.validateTransition(request("ADMINISTRATOR", "key-1")));
+            () -> engine.validateTransition(TENANT, "test-client", request("ADMINISTRATOR", "key-1")));
         assertEquals(HttpStatus.FORBIDDEN, error.getStatus());
         verify(logs, never()).saveAndFlush(any());
     }
 
     @Test
     void rejectsDraftWorkflow() {
-        WorkflowDefinition workflow = definitions.findById(workflowId).orElseThrow();
+        WorkflowDefinition workflow = definitions.findByIdAndTenantKey(workflowId, TENANT).orElseThrow();
         when(workflow.getStatus()).thenReturn(WorkflowStatus.DRAFT);
         WorkflowException error = assertThrows(WorkflowException.class,
-            () -> engine.validateTransition(request("APPLICANT", "key-1")));
+            () -> engine.validateTransition(TENANT, "test-client", request("APPLICANT", "key-1")));
         assertEquals(HttpStatus.CONFLICT, error.getStatus());
         verify(logs, never()).saveAndFlush(any());
     }
@@ -95,9 +97,9 @@ class WorkflowEngineServiceTest {
         previous.setActorId("applicant-123");
         previous.setActorRole("APPLICANT");
         previous.setComments("");
-        when(logs.findByIdempotencyKey("key-1")).thenReturn(Optional.of(previous));
+        when(logs.findByTenantKeyAndIdempotencyKey(TENANT, "key-1")).thenReturn(Optional.of(previous));
 
-        TransitionResponse response = engine.validateTransition(request("APPLICANT", "key-1"));
+        TransitionResponse response = engine.validateTransition(TENANT, "test-client", request("APPLICANT", "key-1"));
         assertEquals("VALIDATED", response.decision());
         verify(logs, never()).saveAndFlush(any());
     }
@@ -115,10 +117,10 @@ class WorkflowEngineServiceTest {
         previous.setActorId("someone-else");
         previous.setActorRole("APPLICANT");
         previous.setComments("");
-        when(logs.findByIdempotencyKey("key-1")).thenReturn(Optional.of(previous));
+        when(logs.findByTenantKeyAndIdempotencyKey(TENANT, "key-1")).thenReturn(Optional.of(previous));
 
         WorkflowException error = assertThrows(WorkflowException.class,
-            () -> engine.validateTransition(request("APPLICANT", "key-1")));
+            () -> engine.validateTransition(TENANT, "test-client", request("APPLICANT", "key-1")));
         assertEquals(HttpStatus.CONFLICT, error.getStatus());
     }
 
@@ -135,13 +137,31 @@ class WorkflowEngineServiceTest {
         previous.setActorId("applicant-123");
         previous.setActorRole("APPLICANT");
         previous.setComments("");
-        when(logs.findByIdempotencyKey("key-1")).thenReturn(Optional.of(previous));
+        when(logs.findByTenantKeyAndIdempotencyKey(TENANT, "key-1")).thenReturn(Optional.of(previous));
 
         WorkflowException error = assertThrows(WorkflowException.class, () ->
-            engine.validateTransition(new ExecuteTransitionRequest(
+            engine.validateTransition(TENANT, "test-client", new ExecuteTransitionRequest(
                 workflowId, 2, subjectId, "DRAFT", "SUBMIT", TriggerType.SYSTEM,
                 "applicant-123", "APPLICANT", "", "key-1")));
         assertEquals(HttpStatus.CONFLICT, error.getStatus());
+    }
+
+    @Test
+    void workflowOfAnotherTenantIsReportedAsNotFound() {
+        when(logs.findByTenantKeyAndIdempotencyKey("OTHER", "key-1")).thenReturn(Optional.empty());
+        when(definitions.findByIdAndTenantKey(workflowId, "OTHER")).thenReturn(Optional.empty());
+
+        WorkflowException error = assertThrows(WorkflowException.class,
+            () -> engine.validateTransition("OTHER", "other-client", request("APPLICANT", "key-1")));
+        assertEquals(HttpStatus.NOT_FOUND, error.getStatus());
+        verify(logs, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void auditLogRecordsTenantAndClient() {
+        engine.validateTransition(TENANT, "test-client", request("APPLICANT", "key-1"));
+        verify(logs).saveAndFlush(argThat(log ->
+            TENANT.equals(log.getTenantKey()) && "test-client".equals(log.getClientId())));
     }
 
     private ExecuteTransitionRequest request(String role, String key) {

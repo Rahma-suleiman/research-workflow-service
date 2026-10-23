@@ -32,11 +32,20 @@ public class WorkflowActorSignatureService {
     }
 
     public void verify(ExecuteTransitionRequest request, String suppliedSignature) {
-        if (secret.length() < 32) {
+        verify(request, suppliedSignature, secret);
+    }
+
+    /** Verifies against a specific caller's secret (each client app has its own). */
+    public void verify(
+        ExecuteTransitionRequest request,
+        String suppliedSignature,
+        String secret
+    ) {
+        if (secret == null || secret.length() < 32) {
             throw new WorkflowException(
                 HttpStatus.SERVICE_UNAVAILABLE,
-                "Actor signature verification is not configured. Set "
-                    + "WORKFLOW_ACTOR_SIGNING_SECRET to a secret of at least 32 characters."
+                "Actor signature verification is not configured for this client. "
+                    + "Configure a signing secret of at least 32 characters."
             );
         }
         if (suppliedSignature == null || suppliedSignature.isBlank()) {
@@ -46,7 +55,7 @@ public class WorkflowActorSignatureService {
             );
         }
 
-        byte[] expected = sign(canonicalPayload(request));
+        byte[] expected = sign(canonicalPayload(request), secret);
         byte[] supplied;
         try {
             supplied = Base64.getUrlDecoder().decode(suppliedSignature.trim());
@@ -67,16 +76,20 @@ public class WorkflowActorSignatureService {
 
     /** Used by trusted integration code and tests to produce the same signature. */
     public String signRequest(ExecuteTransitionRequest request) {
-        if (secret.length() < 32) {
+        return signRequest(request, secret);
+    }
+
+    public String signRequest(ExecuteTransitionRequest request, String secret) {
+        if (secret == null || secret.length() < 32) {
             throw new IllegalStateException(
-                "WORKFLOW_ACTOR_SIGNING_SECRET must contain at least 32 characters."
+                "The actor signing secret must contain at least 32 characters."
             );
         }
         return Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(sign(canonicalPayload(request)));
+            .encodeToString(sign(canonicalPayload(request), secret));
     }
 
-    private byte[] sign(String payload) {
+    private byte[] sign(String payload, String secret) {
         try {
             Mac mac = Mac.getInstance(HMAC_ALGORITHM);
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));

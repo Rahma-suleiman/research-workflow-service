@@ -10,6 +10,7 @@ subject's current status and applies the returned `toStatus`.
 
 ## Concepts
 
+- **Tenant**: one project served by the engine, with isolated data and its own client app credentials. Existing single-project data lives in the built-in `DEFAULT` tenant. See `docs/MULTI_TENANCY.md`.
 - **Subject type**: the kind of record a workflow governs. Registered under `/api/subject-types`.
 - **Role**: a role your users hold. Registered under `/api/roles`. `SYSTEM` is built in and is used for `SYSTEM` and `EXTERNAL_EVENT` triggers.
 - **Workflow definition**: versioned (`DRAFT` → `PUBLISHED` → `ARCHIVED`), with an `initialStatus` and a scope (`ALL_TYPES` or `SELECTED_TYPES`).
@@ -42,7 +43,15 @@ The service listens on port `8081`. Swagger UI is at `http://localhost:8081/swag
 
 ## Endpoints
 
-Administrator account (`ADMINISTRATOR`):
+Every endpoint works on the caller's own tenant. The tenant comes from the credentials, never from the request.
+
+Platform administrator (the environment admin account):
+
+- `GET|POST /api/platform/tenants`, `PUT /api/platform/tenants/{key}` — onboard and (de)activate projects.
+- `GET|POST /api/platform/tenants/{key}/clients` — issue ADMIN or SERVICE client credentials (shown once).
+- `PUT /api/platform/clients/{clientId}`, `POST /api/platform/clients/{clientId}/rotate-credentials`.
+
+Tenant administrator (`ADMINISTRATOR`: the environment admin for `DEFAULT`, or a tenant's ADMIN client):
 
 - `GET|POST /api/roles`, `PUT /api/roles/{key}` — role registry.
 - `GET|POST /api/subject-types`, `PUT /api/subject-types/{key}` — subject-type registry.
@@ -53,7 +62,7 @@ Administrator account (`ADMINISTRATOR`):
 - `GET /api/workflows/{id}/validation` — read-only graph and configuration report.
 - `GET /api/workflows/coverage` — whether every active subject type has exactly one active workflow.
 
-Service account (`WORKFLOW_SERVICE`, used by the calling backend):
+Service account (`WORKFLOW_SERVICE`: the environment service account for `DEFAULT`, or a tenant's SERVICE client):
 
 - `GET /api/workflows/resolve?subjectType=PURCHASE_ORDER` — the active workflow for a new subject; store its id and version on the subject.
 - `GET /api/workflows/{id}/versions/{version}` — the pinned version for an existing subject.
@@ -61,10 +70,11 @@ Service account (`WORKFLOW_SERVICE`, used by the calling backend):
 
 ## Onboarding a new project
 
-1. Register your roles and subject types (via the API, or a SQL seed like `scripts/examples/research-permit-registry.sql`).
-2. Create a workflow with its `initialStatus` and subject types, add stages, check `/validation`, then `/publish`.
-3. In your backend, call `/resolve` when a subject is created and pin the workflow id and version.
-4. For each user action, send a signed `/api/transitions/execute` request with a unique idempotency key. Apply the returned `toStatus` with a compare-and-set update (`... WHERE status = :fromStatus`).
+1. The platform administrator creates a tenant and its ADMIN and SERVICE clients (`docs/MULTI_TENANCY.md`). A single-project deployment can skip this and use the environment accounts in `DEFAULT`.
+2. Register your roles and subject types (via the API, or a SQL seed like `scripts/examples/research-permit-registry.sql`).
+3. Create a workflow with its `initialStatus` and subject types, add stages, check `/validation`, then `/publish`.
+4. In your backend, call `/resolve` when a subject is created and pin the workflow id and version.
+5. For each user action, send a request signed with your SERVICE client's signing secret: a `/api/transitions/execute` request with a unique idempotency key. Apply the returned `toStatus` with a compare-and-set update (`... WHERE status = :fromStatus`).
 
 ## Database verification
 
@@ -97,7 +107,7 @@ Then confirm the application starts with the real deployment configuration. Open
 ## Roadmap
 
 1. Generic vocabulary: registries, subject types, configurable initial status (done).
-2. Tenants and client apps: per-project credentials, signing secrets, and data isolation.
+2. Tenants and client apps: per-project credentials, signing secrets, and data isolation (done).
 3. Workflow instances: the engine owns each subject's current status and applies transitions atomically.
 4. Integration: webhooks/outbox, SLA tracking, external-approval callbacks.
 5. Packaging: Docker image and client SDKs.
